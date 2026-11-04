@@ -11,7 +11,7 @@ Desktop product events use the optional [product analytics service](../product-a
 
 ## Summary
 
-The dsh web client sidebar lets users recognize the active build, start a new session, collapse navigation to a 56px rail, browse Workspaces and Sessions, and open Settings. It preserves a bottom-pinned Settings entry and hides idle scrollbars without moving browser rows. New Session uses an explicitly selected Workspace, then the current Session's Workspace, then the most recently active Workspace; if none exists, it opens a blank New Session page. Deployments can replace the brand mark or name while retaining the navigation controls and rail geometry.
+The dsh web client sidebar lets users recognize the active build, start a new session, collapse navigation to a 56px rail, browse Projects, Workspaces, and Sessions, and open Settings. It preserves a bottom-pinned Settings entry and hides idle scrollbars without moving browser rows. New Session uses an explicitly selected Workspace, then the current Session's Workspace, then the most recently active Workspace; if none exists, it opens a blank New Session page. Deployments can replace the brand mark or name while retaining the navigation controls and rail geometry.
 
 ## Table of Contents
 
@@ -97,7 +97,7 @@ Declaration-aware `slots.inject()` lets a replacing package activate before or a
 
 These pages cover the surfaces that fill the shell's seats and the composition model.
 
-- [ui-workspace](../ui-workspace/README.md) — the Workspace and Session browser rendered into `sidebar.workspaces`.
+- [ui-workspace](../ui-workspace/README.md) — the Project, Workspace, and Session browser rendered into `sidebar.workspaces`.
 - [ui-settings](../ui-settings/README.md) — the settings domain base registering the trigger row at `sidebar.settings`.
 - [ui-layout](../ui-layout/README.md) — the layout owner whose rail and column state the collapse uses.
 - [ui-theme](../ui-theme/README.md) — the scrollbar token indirection the shell rebinds.

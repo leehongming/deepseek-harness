@@ -1,5 +1,6 @@
 - menu:
   - text: Group by
+  - menuitem "Projects"
   - menuitem "WorkSpace"
   - menuitem "Workspace Tree"
   - menuitem "In one list"

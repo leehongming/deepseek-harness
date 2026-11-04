@@ -1,12 +1,13 @@
 /**
  * Derives the workspace browser tree from caller-projected Workspace and
  * Session order. Unassigned Sessions trail under Ungrouped; only the selected
- * blank Session remains visible.
+ * blank Session remains visible. `deriveProjectTree` buckets the same Workspace
+ * groups one level higher, into user-managed projects.
  */
 import {
   type SessionListState, type SessionSearchResultItem, type SessionSummary,
 } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { ProjectId, ProjectView, WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {
   SessionStatusSnapshot,
 } from '@deepseek-ai/dsh-client-ui-session/client'
@@ -113,6 +114,28 @@ export interface TreeView {
   expandedGroups: readonly string[]
   /** Browser-local order for Sessions without a backing Workspace account. */
   ungroupedOrder?: readonly string[]
+  /** Project-level expansion; an absent key means expanded. Read only by {@link deriveProjectTree}. */
+  projectExpansion?: Readonly<Record<string, boolean>>
+}
+
+/**
+ * One project section in the project-grouped view: header facts plus the
+ * Workspace groups it owns, in the browser's Workspace order.
+ */
+export interface ProjectNode {
+  /** Section key: the project id, or {@link UNGROUPED_KEY} for the unassigned bucket. */
+  key: string
+  /** Backing project id; absent only for the unassigned bucket. */
+  projectId: ProjectId | undefined
+  /** Project title; empty for the unassigned bucket, whose label the renderer localizes. */
+  title: string
+  /** Visible Workspace groups in the section (the count the header badge shows). */
+  workspaceCount: number
+  expanded: boolean
+  /** One of this project's Workspaces contains the selected Session. */
+  containsCurrent: boolean
+  /** Visible Workspace groups, empty while the project is folded. */
+  workspaces: readonly GroupNode[]
 }
 
 interface Group {
@@ -458,6 +481,100 @@ export function deriveGroups(
     })
   }
   return groups
+}
+
+/**
+ * Resolve the project that owns one Workspace.
+ * @param projects - project display order with membership.
+ * @param workspaceId - Workspace whose project is required.
+ * @returns the owning project id, or undefined when the Workspace is unassigned.
+ */
+export function owningProjectKey(
+  projects: readonly ProjectView[],
+  workspaceId: WorkspaceId,
+): string | undefined {
+  return projects.find(project => project.workspaceIds.includes(workspaceId))?.projectId
+}
+
+/**
+ * Derive the project-grouped browser sections: one section per project in
+ * project display order, then the unassigned bucket holding Workspaces that
+ * belong to no project. Call it only once at least one project exists; with
+ * none the project view keeps the plain Workspace sections, so a first-run
+ * sidebar shows no grouping level and no empty unassigned bucket. Each section
+ * contains the same Workspace groups {@link deriveGroups} produces, in the
+ * browser's Workspace order; archived rows follow the same filter, and the
+ * archived-only view drops a section with no visible Workspace. A project that owns nothing stays visible with a
+ * zero count so it can still be renamed or deleted.
+ * @param list - sessions list snapshot (`mainView` retention feeds containsCurrent).
+ * @param workspaces - real Workspaces in Host group order with caller-projected Session order.
+ * @param projects - projects in display order with their Workspace membership.
+ * @param rowState - registry-global pin and archive sets plus the archived filter.
+ * @param statuses - unified UI status by Session.
+ * @param view - local expansion arrays and the project expansion map.
+ * @returns project sections in render order.
+ */
+export function deriveProjectTree(
+  list: SessionListState,
+  workspaces: readonly WorkspaceView[],
+  projects: readonly ProjectView[],
+  rowState: SessionRowState,
+  statuses: SessionStatuses,
+  view: TreeView,
+): ProjectNode[] {
+  const groups = deriveGroups(list, workspaces, rowState, statuses, view)
+  const current = mainSessionId(list)
+  const currentGroup = current === undefined ? undefined : owningGroupKey(workspaces, current)
+  // Workspace membership projected once. A Workspace belongs to at most one
+  // project; where two project records claim it anyway, the first project in
+  // display order keeps it. Bucketing starts from the derived Workspace groups,
+  // so a stale id with no Workspace row (a just-deleted registration before
+  // the Host prunes the project) renders nothing, and the registry order — not
+  // the membership order — decides display order inside a project.
+  const ownerOf = new Map<string, string>()
+  for (const project of projects) {
+    for (const workspaceId of project.workspaceIds) {
+      if (!ownerOf.has(workspaceId)) ownerOf.set(workspaceId, project.projectId)
+    }
+  }
+  const buckets = new Map<string | undefined, GroupNode[]>()
+  for (const group of groups) {
+    const owner = group.workspaceId === undefined ? undefined : ownerOf.get(group.workspaceId)
+    const members = buckets.get(owner)
+    if (members === undefined) buckets.set(owner, [group])
+    else members.push(group)
+  }
+  const expanded = (key: string): boolean => view.projectExpansion?.[key] ?? true
+  const nodes: ProjectNode[] = []
+  for (const project of projects) {
+    const members = buckets.get(project.projectId) ?? []
+    if (rowState.archivedFilter === 'only' && members.length === 0) continue
+    const open = expanded(project.projectId)
+    nodes.push({
+      key: project.projectId,
+      projectId: project.projectId,
+      title: project.title,
+      workspaceCount: members.length,
+      expanded: open,
+      containsCurrent: currentGroup !== undefined
+        && project.workspaceIds.some(workspaceId => workspaceId === currentGroup),
+      workspaces: open ? members : [],
+    })
+  }
+  const unassigned = buckets.get(undefined) ?? []
+  if (unassigned.length > 0) {
+    const open = expanded(UNGROUPED_KEY)
+    nodes.push({
+      key: UNGROUPED_KEY,
+      projectId: undefined,
+      title: '',
+      workspaceCount: unassigned.length,
+      expanded: open,
+      containsCurrent: currentGroup !== undefined && ownerOf.get(currentGroup) === undefined,
+      workspaces: open ? unassigned : [],
+    })
+  }
+  return nodes
 }
 
 /**

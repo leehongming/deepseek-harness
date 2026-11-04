@@ -23,7 +23,7 @@ const ACTION_TRAILING_INSET = 7
 const SEARCH_HEIGHT = 32
 const SEARCH_TRANSITION_MS = 180
 const HEADER_LABEL_OFFSET = 7
-const HEADER_ACTION_RIGHT_OFFSETS = { search: -61, view: -29, add: 3 }
+const HEADER_ACTION_RIGHT_OFFSETS = { search: -61, view: -29, project: 3, add: 35 }
 
 /**
  * Measure painted glyphs and pointer targets independently of the row's layout cells.
@@ -160,7 +160,12 @@ describe('web e2e: sidebar search alignment and row action targets', () => {
       await expect.poll(async () => {
         const reference = await newSession.boundingBox()
         if (reference === null) throw new Error('New session has no layout box')
-        const controls = [searchButton, page.getByRole('button', { name: 'View options', exact: true }), page.getByRole('button', { name: 'Add workspace', exact: true })]
+        const controls = [
+          searchButton,
+          page.getByRole('button', { name: 'View options', exact: true }),
+          page.getByRole('button', { name: 'Add project', exact: true }),
+          page.getByRole('button', { name: 'Add workspace', exact: true }),
+        ]
         const boxes = await Promise.all(controls.map(control => control.boundingBox()))
         return boxes.map(box => box === null ? null : box.x + box.width - reference.x - reference.width)
       }).toEqual(Object.values(HEADER_ACTION_RIGHT_OFFSETS))

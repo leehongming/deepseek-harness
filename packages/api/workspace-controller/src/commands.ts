@@ -3,6 +3,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import {
+  ProjectId,
+  ProjectNotFoundError,
+  ProjectTitleConflictError,
   WorkspaceActiveSessionError,
   WorkspaceArchivedSessionPinError,
   WorkspaceId,
@@ -11,8 +14,16 @@ import {
   WorkspaceUnknownSessionError,
 } from '@deepseek-ai/dsh-workspace'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
-import { workspaceView } from './feed.ts'
+import { projectView, workspaceView } from './feed.ts'
 import type {
+  ProjectAssignWorkspaceRequest,
+  ProjectCreateRequest,
+  ProjectCreateValue,
+  ProjectDeleteRequest,
+  ProjectDeleteValue,
+  ProjectListValue,
+  ProjectRenameRequest,
+  ProjectValue,
   WorkspaceArchiveSessionRequest,
   WorkspaceArchiveValue,
   WorkspaceCreateRequest,
@@ -226,6 +237,86 @@ export class WorkspaceCommands {
     return { pinnedSessionIds: [...this.ctx.workspaceRegistry.pinnedSessionIds] }
   }
 
+  /**
+   * Create one Project with a unique non-blank title.
+   * @param request - proposed Project title.
+   * @returns the created Project projection.
+   */
+  createProject(request: ProjectCreateRequest): Promise<ProjectCreateValue> {
+    const title = request.title.trim()
+    if (title === '') {
+      return Promise.reject(new RemoteError('gateway/bad-request', 'Project creation requires a non-blank title', {}))
+    }
+    return this.enqueue(async () => {
+      try {
+        const project = await this.ctx.workspaceRegistry.createProject(title)
+        return { project: projectView(project) }
+      } catch (error) {
+        if (error instanceof ProjectTitleConflictError) throw projectNameConflict(title)
+        throw error
+      }
+    })
+  }
+
+  /**
+   * Rename one Project to a unique non-blank title.
+   * @param request - Project identity and proposed title.
+   * @returns the updated Project projection.
+   */
+  renameProject(request: ProjectRenameRequest): Promise<ProjectValue> {
+    const title = request.title.trim()
+    if (title === '') {
+      return Promise.reject(new RemoteError('gateway/bad-request', 'Project rename requires a non-blank title', {}))
+    }
+    return this.enqueue(async () => {
+      try {
+        const project = await this.ctx.workspaceRegistry.renameProject(request.projectId, title)
+        return { project: projectView(project) }
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) throw projectNotFound(error.projectId)
+        if (error instanceof ProjectTitleConflictError) throw projectNameConflict(title)
+        throw error
+      }
+    })
+  }
+
+  /**
+   * Delete one Project. Its member Workspaces become ungrouped and are kept.
+   * @param request - Project identity to delete.
+   * @returns deletion confirmation.
+   */
+  deleteProject(request: ProjectDeleteRequest): Promise<ProjectDeleteValue> {
+    return this.enqueue(async () => {
+      if (!await this.ctx.workspaceRegistry.deleteProject(request.projectId)) {
+        throw projectNotFound(request.projectId)
+      }
+      return { deleted: true }
+    })
+  }
+
+  /**
+   * Move one Workspace into a Project, or out of every Project when the
+   * request omits `projectId`. A Workspace joins at most one Project, so a
+   * move away from another Project is part of the same write.
+   * @param request - Workspace identity and its target Project, if any.
+   * @returns the complete resulting Project list, newest created first.
+   */
+  assignWorkspaceProject(request: ProjectAssignWorkspaceRequest): Promise<ProjectListValue> {
+    return this.enqueue(async () => {
+      this.requireWorkspace(request.workspaceId)
+      try {
+        await this.ctx.workspaceRegistry.assignWorkspaceToProject(
+          request.workspaceId,
+          request.projectId === undefined ? undefined : ProjectId(request.projectId),
+        )
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) throw projectNotFound(error.projectId)
+        throw error
+      }
+      return { projects: this.ctx.workspaceRegistry.listProjects().map(project => projectView(project)) }
+    })
+  }
+
   private requireWorkspace(workspaceId: WorkspaceId): Workspace {
     const workspace = this.ctx.workspaceRegistry.get(WorkspaceId(workspaceId))
     if (workspace === undefined) throw workspaceNotFound(workspaceId)
@@ -244,6 +335,22 @@ function workspaceNotFound(workspaceId: WorkspaceId): RemoteError<'workspace/not
     'workspace/not-found',
     `Workspace "${workspaceId}" not found`,
     { workspaceId },
+  )
+}
+
+function projectNotFound(projectId: ProjectId): RemoteError<'project/not-found'> {
+  return new RemoteError(
+    'project/not-found',
+    `Project "${projectId}" not found`,
+    { projectId },
+  )
+}
+
+function projectNameConflict(name: string): RemoteError<'project/name-conflict'> {
+  return new RemoteError(
+    'project/name-conflict',
+    `Project name '${name}' is already in use`,
+    { name },
   )
 }
 

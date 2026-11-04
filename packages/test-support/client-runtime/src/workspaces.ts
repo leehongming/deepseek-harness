@@ -1,7 +1,7 @@
 /** Test-owned workspaces face: the renderer standard-kit observable plus recorded actions. */
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {
-  IWorkspaces, WorkspaceId, WorkspaceSnapshot, WorkspaceView,
+  IWorkspaces, ProjectId, ProjectView, WorkspaceId, WorkspaceSnapshot, WorkspaceView,
 } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -10,6 +10,9 @@ import type { FixtureSnapshot, Stabilizer } from './fixtures.ts'
 
 /** Writable test representation of the immutable Workspace Controller snapshot. */
 type WorkspaceFixtureSnapshot = FixtureSnapshot<WorkspaceSnapshot>
+
+/** Timestamp the test double stamps on every Project row it fabricates. */
+const PROJECT_EPOCH = '2026-01-01T00:00:00.000Z'
 
 /** Callable command names on the production Workspace Controller face. */
 type WorkspaceAction = {
@@ -168,6 +171,95 @@ export class TestWorkspaces implements IWorkspaces {
     }
     await this.update((draft) => {
       draft.archivedSessionIds = draft.archivedSessionIds.filter(id => id !== sessionId)
+    })
+  }
+
+  /**
+   * Create a Project (recorded). The default mirrors the production face's
+   * observable effect: the new Project leads the list state's Project list.
+   * @param title - unique non-blank Project title.
+   * @returns the created Project view.
+   */
+  async createProject(title: string): Promise<ProjectView> {
+    this.calls.push({ method: 'createProject', args: [title] })
+    const stub = this.stubs.get('createProject')
+    if (stub !== undefined) return await (stub(title) as Promise<ProjectView>)
+    const project: ProjectView = {
+      projectId: `project-${title}` as ProjectId,
+      title,
+      workspaceIds: [],
+      createdAt: PROJECT_EPOCH,
+      updatedAt: PROJECT_EPOCH,
+    }
+    await this.update((draft) => {
+      draft.projects = [project, ...draft.projects]
+    })
+    return project
+  }
+
+  /**
+   * Rename a Project (recorded). The default mirrors the production face's
+   * observable effect: the row keeps its id and membership.
+   * @param projectId - target Project.
+   * @param title - unique non-blank new title.
+   * @returns the renamed Project view.
+   */
+  async renameProject(projectId: ProjectId, title: string): Promise<ProjectView> {
+    this.calls.push({ method: 'renameProject', args: [projectId, title] })
+    const stub = this.stubs.get('renameProject')
+    if (stub !== undefined) return await (stub(projectId, title) as Promise<ProjectView>)
+    const renamed: ProjectView = {
+      ...this.list.getSnapshot().projects.find(project => project.projectId === projectId)
+        ?? { projectId, title, workspaceIds: [], createdAt: PROJECT_EPOCH, updatedAt: PROJECT_EPOCH },
+      title,
+      updatedAt: PROJECT_EPOCH,
+    }
+    await this.update((draft) => {
+      draft.projects = draft.projects.map(project => project.projectId === projectId ? renamed : project)
+    })
+    return renamed
+  }
+
+  /**
+   * Delete a Project (recorded). The default mirrors the production face's
+   * observable effect: the row leaves the list state and its Workspaces stay.
+   * @param projectId - target Project.
+   */
+  async deleteProject(projectId: ProjectId): Promise<void> {
+    this.calls.push({ method: 'deleteProject', args: [projectId] })
+    const stub = this.stubs.get('deleteProject')
+    if (stub !== undefined) {
+      await (stub(projectId) as Promise<void>)
+      return
+    }
+    await this.update((draft) => {
+      draft.projects = draft.projects.filter(project => project.projectId !== projectId)
+    })
+  }
+
+  /**
+   * Move a Workspace into a Project, or out of every Project (recorded). The
+   * default mirrors the production face's observable effect: membership moves
+   * in the list state and a Workspace never belongs to two Projects.
+   * @param workspaceId - Workspace whose membership changes.
+   * @param projectId - target Project; omitted ungroups the Workspace.
+   */
+  async assignWorkspaceProject(workspaceId: WorkspaceId, projectId?: ProjectId): Promise<void> {
+    this.calls.push({ method: 'assignWorkspaceProject', args: [workspaceId, projectId] })
+    const stub = this.stubs.get('assignWorkspaceProject')
+    if (stub !== undefined) {
+      await (stub(workspaceId, projectId) as Promise<void>)
+      return
+    }
+    await this.update((draft) => {
+      draft.projects = draft.projects.map((project) => {
+        const membership = project.workspaceIds.filter(id => id !== workspaceId)
+        const workspaceIds = project.projectId === projectId ? [...membership, workspaceId] : membership
+        return workspaceIds.length === project.workspaceIds.length
+          && workspaceIds.every((id, index) => id === project.workspaceIds[index])
+          ? project
+          : { ...project, workspaceIds, updatedAt: PROJECT_EPOCH }
+      })
     })
   }
 

@@ -6,9 +6,9 @@
  */
 
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { SessionActivity, WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
+import type { ProjectId, SessionActivity, WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 
-export type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
+export type { ProjectId, WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 export type {
   SessionActivity, SessionActivityItem, SessionActivityKind, SessionActivityKindMap,
 } from '@deepseek-ai/dsh-workspace/types'
@@ -29,12 +29,29 @@ export interface WorkspaceView {
   readonly updatedAt: string
 }
 
+/** One durable Project — a user-managed group of Workspaces — projected for browser consumers. */
+export interface ProjectView {
+  readonly projectId: ProjectId
+  /** User-visible title, unique among projects and never blank. */
+  readonly title: string
+  /** Member Workspaces in registry display order; a Workspace joins at most one project. */
+  readonly workspaceIds: readonly WorkspaceId[]
+  /** ISO-8601 creation instant. */
+  readonly createdAt: string
+  /** ISO-8601 last-mutation instant. */
+  readonly updatedAt: string
+}
+
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** The requested directory cannot back a Workspace. */
     'workspace/invalid-path': { readonly path: string }
     /** Another Workspace already uses the requested name. */
     'workspace/name-conflict': { readonly name: string }
+    /** No project carries that identity. */
+    'project/not-found': { readonly projectId: ProjectId }
+    /** Another project already uses the requested title. */
+    'project/name-conflict': { readonly name: string }
     /**
      * The Session still has running work — its own turn, a subagent, a
      * background job, or an active schedule — so archiving was refused
@@ -149,12 +166,56 @@ export interface WorkspacePinValue {
   readonly pinnedSessionIds: readonly SessionId[]
 }
 
+/** Project creation request; the title is trimmed and must not be blank. */
+export interface ProjectCreateRequest {
+  readonly title: string
+}
+
+/** Newly created Project projection. */
+export interface ProjectCreateValue {
+  readonly project: ProjectView
+}
+
+/** Project title mutation. */
+export interface ProjectRenameRequest {
+  readonly projectId: ProjectId
+  readonly title: string
+}
+
+/** Project mutation returning the complete changed row. */
+export interface ProjectValue {
+  readonly project: ProjectView
+}
+
+/** Project deletion. */
+export interface ProjectDeleteRequest {
+  readonly projectId: ProjectId
+}
+
+/** Receipt after one Project is deleted; its Workspaces become ungrouped and are kept. */
+export interface ProjectDeleteValue {
+  readonly deleted: true
+}
+
+/** Move one Workspace into a Project, or out of every Project when `projectId` is omitted. */
+export interface ProjectAssignWorkspaceRequest {
+  readonly workspaceId: WorkspaceId
+  readonly projectId?: ProjectId
+}
+
+/** Complete Project list after a membership mutation, newest created first. */
+export interface ProjectListValue {
+  readonly projects: readonly ProjectView[]
+}
+
 /** Complete reconnect baseline for Workspace browser state. */
 export interface WorkspaceBaseline {
   readonly items: readonly WorkspaceView[]
   readonly archivedSessionIds: readonly SessionId[]
   /** Registry-global pin set, most recently pinned first. */
   readonly pinnedSessionIds: readonly SessionId[]
+  /** Every Project in display order, newest created first. */
+  readonly projects: readonly ProjectView[]
 }
 
 /**
@@ -169,6 +230,7 @@ export type WorkspaceFollowIncrement =
   | { readonly type: 'order'; readonly workspaceIds: readonly WorkspaceId[] }
   | { readonly type: 'archived'; readonly archivedSessionIds: readonly SessionId[] }
   | { readonly type: 'pinned'; readonly pinnedSessionIds: readonly SessionId[] }
+  | { readonly type: 'projects'; readonly projects: readonly ProjectView[] }
 
 /** Workspace state stream; every generation starts with exactly one baseline. */
 export type WorkspaceFollowFrame =

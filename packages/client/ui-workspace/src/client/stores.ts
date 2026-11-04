@@ -1,6 +1,7 @@
 /**
  * The workspace browser's viewing store: the session-list grouping mode,
- * persisted across reloads. Module level exports the factory only (a
+ * Workspace and project expansion, and the saved Session orders, persisted
+ * across reloads. Module level exports the factory only (a
  * module-level handle would pin the store identity across plugin reloads);
  * register() receives the factory and the browser derives its PropsStore
  * share from the return type.
@@ -13,8 +14,8 @@ import { reconcileManualOrder, type ArchivedFilter, type SessionRowState } from 
 /** Browser-local order account for the hierarchy-free flat Session list. */
 export const FLAT_SESSION_ORDER_KEY = '__flat_session_order__'
 
-/** Session-list grouping mode: sibling Workspace sections, a Workspace tree, or one flat list. */
-export type SessionGroupBy = 'workspace' | 'workspace-tree' | 'flat'
+/** Session-list grouping mode: project sections, sibling Workspace sections, a Workspace tree, or one flat list. */
+export type SessionGroupBy = 'project' | 'workspace' | 'workspace-tree' | 'flat'
 /** Session order: saved manual positions or current recency. */
 export type SessionOrderBy = 'manual' | 'updated'
 
@@ -24,6 +25,8 @@ type WorkspaceViewState = {
   orderBy: SessionOrderBy
   /** Explicit group expansion keyed by Workspace identity, including descendants in tree mode. */
   groupExpansion: Record<string, boolean>
+  /** Explicit project expansion keyed by project identity; an absent key means expanded. */
+  projectExpansion: Record<string, boolean>
   /** Saved manual order per Workspace group plus the browser-local flat-list account. */
   sessionOrderByAccount: Record<string, string[]>
   /** Archived-row visibility; omitted in pre-filter v5 snapshots and read as 'default'. */
@@ -48,7 +51,12 @@ type WorkspaceViewActions = {
     initialOrders: Readonly<Record<string, readonly string[]>>,
   ) => void
   setGroupExpanded: (draft: WorkspaceViewState, key: string, expanded: boolean) => void
-  retainAccountKeys: (draft: WorkspaceViewState, workspaceKeys: readonly string[]) => void
+  setProjectExpanded: (draft: WorkspaceViewState, key: string, expanded: boolean) => void
+  retainAccountKeys: (
+    draft: WorkspaceViewState,
+    workspaceKeys: readonly string[],
+    projectKeys: readonly string[],
+  ) => void
   syncSessionOrders: (
     draft: WorkspaceViewState,
     orders: Readonly<Record<string, readonly string[]>>,
@@ -82,13 +90,14 @@ function copySessionOrders(
 export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState, WorkspaceViewActions> {
   return defineStore({
     init: (): WorkspaceViewState => ({
-      groupBy: 'workspace',
+      groupBy: 'project',
       orderBy: 'updated',
       groupExpansion: {},
+      projectExpansion: {},
       sessionOrderByAccount: {},
       archivedFilter: 'default',
     }),
-    persist: 'dsh.workspace.view.v5',
+    persist: 'dsh.workspace.view.v6',
     actions: {
       setGroupBy: (d, mode: SessionGroupBy) => { d.groupBy = mode },
       setOrderBy: (d, mode: SessionOrderBy, initialOrders) => {
@@ -97,13 +106,18 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
         d.orderBy = mode
       },
       setGroupExpanded: (d, key: string, expanded: boolean) => { d.groupExpansion[key] = expanded },
-      retainAccountKeys: (d, workspaceKeys: readonly string[]) => {
+      setProjectExpanded: (d, key: string, expanded: boolean) => { d.projectExpansion[key] = expanded },
+      retainAccountKeys: (d, workspaceKeys: readonly string[], projectKeys: readonly string[]) => {
         const retained = new Set(workspaceKeys)
         d.groupExpansion = Object.fromEntries(
           Object.entries(d.groupExpansion).filter(([key]) => retained.has(key)),
         )
         d.sessionOrderByAccount = Object.fromEntries(
           Object.entries(d.sessionOrderByAccount).filter(([key]) => retained.has(key)),
+        )
+        const retainedProjects = new Set(projectKeys)
+        d.projectExpansion = Object.fromEntries(
+          Object.entries(d.projectExpansion).filter(([key]) => retainedProjects.has(key)),
         )
         delete (d as WorkspaceViewState & { sessionUpdatedAtByAccount?: unknown }).sessionUpdatedAtByAccount
       },

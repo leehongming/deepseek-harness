@@ -44,3 +44,10 @@ Domain vocabulary for DeepSeek Harness uses one canonical term per concept. Term
 - **Ralph loop** — one foreground fresh-agent workflow run toward an immutable objective. It is a model-facing tool policy composed from workflow and subagent primitives, not a same-session goal, agent-loop mode, scheduler, or generic workflow-script feature. <a id="ralph-loop"></a>
 - **Ralph round** — one fresh child session in a [Ralph loop](#ralph-loop). The child receives no parent or prior-child conversation seed; the shared workspace and one bounded [Ralph handoff](#ralph-handoff) carry cross-round state. <a id="ralph-round"></a>
 - **Ralph handoff** — the normalized bounded structured report passed from one continuing Ralph round to the next, containing status, summary, evidence, next steps, and blocker text. It supplements the shared workspace rather than replacing it as authority. <a id="ralph-handoff"></a>
+
+<a id="workspace"></a>
+## workspace
+
+- **workspace** — one durable directory record: a stable id, a canonical path, a display title, and the ordered account of sessions recorded for it. It is a registry record, not the directory itself: deleting the registration never deletes files or sessions.
+- **project** — a durable, user-managed grouping above [workspaces](#workspace): a unique title plus the workspaces assigned to it. A workspace belongs to at most one project; membership changes never move, rename, or delete a workspace or a session. <a id="project"></a>
+- **ungrouped** — the workspaces a project list shows outside every [project](#project), and the sessions no workspace accounts for. <a id="ungrouped"></a>

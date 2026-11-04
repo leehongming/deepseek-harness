@@ -1,4 +1,4 @@
-.projectRow,
+.treeRow,
 .sessionRow {
   display: flex;
   align-items: center;
@@ -16,7 +16,7 @@
 }
 
 @media (hover: hover) {
-  .projectRow:hover {
+  .treeRow:hover {
     background-color: var(--dsw-alias-interactive-bg-hover);
   }
 }
@@ -109,14 +109,39 @@
 }
 
 /* Compact one-line Workspace row after removing the session-count subtitle. */
-.projectRow {
+.treeRow {
   height: 34px;
   align-items: center;
   box-sizing: border-box;
 }
 
-.projectRow .rowActions {
+.treeRow .rowActions {
   height: 20px;
+}
+
+/* Project header: the shared tree-row anatomy one level above Workspaces. The
+   outline glyph distinguishes the grouping level from the filled Workspace
+   folders, and a folded project keeps its chevron at rest so the disclosure
+   reads without hovering. */
+.projectHeader[aria-expanded='false'] .projectIcon {
+  display: none;
+}
+
+.projectHeader[aria-expanded='false'] .chevron {
+  display: inline-flex;
+}
+
+/* Visible Workspace count: the tertiary label step, aligned on the label
+   baseline, on the title cell's tail. */
+.projectCount {
+  flex: none;
+  min-width: 16px;
+  margin-inline-start: 2px;
+  text-align: end;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Session titles share the workspace icon slot and compact label gap. */
@@ -153,12 +178,12 @@
 }
 
 
-/* Project leading slot: folder by default, expand arrow on row hover. */
-.projectRow .chevron { display: none; }
+/* Tree header leading slot: folder by default, expand arrow on row hover. */
+.treeRow .chevron { display: none; }
 @media (hover: hover) {
-  .projectRow:hover .chevron { display: inline-flex; }
+  .treeRow:hover .chevron { display: inline-flex; }
 
-  .projectRow:hover .folder { display: none; }
+  .treeRow:hover .folder { display: none; }
 }
 
 /* Expand arrow (filled triangle): points right closed, rotates to point down open. */
@@ -170,7 +195,7 @@
   transform: rotate(90deg);
 }
 
-.projectText {
+.treeRowLabel {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -278,13 +303,13 @@
 }
 
 @media (hover: hover) {
-  .projectRow:hover .rowActions,
+  .treeRow:hover .rowActions,
   .searchResultRow:hover .rowActions {
     display: inline-flex;
   }
 }
 
-.projectRow.menuOpen .rowActions {
+.treeRow.menuOpen .rowActions {
   display: inline-flex;
 }
 
@@ -338,7 +363,7 @@
 }
 
 @media (hover: none) {
-  .projectRow .rowActions,
+  .treeRow .rowActions,
   .searchResultRow .rowActions,
   .sessionRow .rowActions {
     display: inline-flex;
@@ -348,7 +373,9 @@
   .sessionRow .timestamp,
   .sessionRow:has(.pinnedAction) .pinIndicator,
   .sessionRow .rowQuickActions > :global([data-slot]) > :not(.pinnedAction),
-  .projectRow[aria-expanded='false'] .rowActions {
+  /* A folded Workspace row keeps its menu hidden on touch; a folded project
+     header keeps its menu, which is where rename and delete live. */
+  .workspaceHeaderRow[aria-expanded='false'] .rowActions {
     display: none;
   }
 
@@ -360,7 +387,7 @@
 
 /* An open row menu pins the hover affordances (figma: the row keeps its
    hover fill while its dropdown is up). */
-.projectRow.menuOpen,
+.treeRow.menuOpen,
 .sessionRow.menuOpen {
   background-color: var(--dsw-alias-interactive-bg-hover);
 }

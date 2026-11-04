@@ -3,7 +3,7 @@ import { contextMenuHook } from '@deepseek-ai/dsh-client-test-runtime'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps } from 'react'
-import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { ProjectId, WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { allowAllAccess, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
@@ -12,9 +12,10 @@ import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import type { RowDragProps } from '../src/client/rows/Rows.tsx'
 import {
-  ProjectRowItem as ProjectRowItemComponent, SearchResultItem, SessionNodeItem as SessionNodeItemComponent,
+  ProjectNodeItem as ProjectNodeItemComponent, WorkspaceHeaderRowItem as WorkspaceHeaderRowItemComponent,
+  SearchResultItem, SessionNodeItem as SessionNodeItemComponent,
 } from '../src/client/rows/Rows.tsx'
-import type { GroupNode, SearchResultNode, SessionNode } from '../src/client/tree.ts'
+import type { GroupNode, ProjectNode, SearchResultNode, SessionNode } from '../src/client/tree.ts'
 import { en, zh } from '../src/client/locales.ts'
 import rowCss from '../src/client/rows/Rows.module.css'
 
@@ -37,7 +38,8 @@ type RowSlotName =
   | 'sidebar.session.row.hover'
 type RowRenderSlot = PropsRenderSlots<RowSlotName>['renderSlot']
 type SessionNodeItemProps = ComponentProps<typeof SessionNodeItemComponent>
-type ProjectRowItemProps = ComponentProps<typeof ProjectRowItemComponent>
+type WorkspaceHeaderRowItemProps = ComponentProps<typeof WorkspaceHeaderRowItemComponent>
+type ProjectNodeItemProps = ComponentProps<typeof ProjectNodeItemComponent>
 
 const renderNoRowEntries: RowRenderSlot = () => null
 
@@ -60,14 +62,23 @@ function SessionNodeItem({ renderSlot = renderNoRowEntries, onRenameRequest = ()
     useContextMenu={props.useContextMenu ?? contextMenuHook((target, point) => { if (target.kind === 'session') openSessionMenu(target.value.sessionId, target.value.displayTitle, point) })} openSessionMenu={openSessionMenu} useContextMenuTarget={useContextMenuTarget} useSessionAccess={useSessionAccess} />
 }
 
-// Direct header specs hold every access answer unless the case refuses one.
-function ProjectRowItem({
+// Direct Workspace-header specs hold every access answer unless the case refuses one.
+function WorkspaceHeaderRowItem({
   useRemoteAccess = allowAllAccess.useRemoteAccess, useWorkspaceAccess = allowAllAccess.useWorkspaceAccess,
   openWorkspaceMenu = vi.fn(), useContextMenuTarget = select => select(null), ...props
-}: Omit<ProjectRowItemProps, 'useRemoteAccess' | 'useWorkspaceAccess' | 'openWorkspaceMenu' | 'useContextMenuTarget' | 'useContextMenu'>
-  & Partial<Pick<ProjectRowItemProps, 'useRemoteAccess' | 'useWorkspaceAccess' | 'openWorkspaceMenu' | 'useContextMenuTarget' | 'useContextMenu'>>) {
-  return <ProjectRowItemComponent {...props} useRemoteAccess={useRemoteAccess} useWorkspaceAccess={useWorkspaceAccess}
+}: Omit<WorkspaceHeaderRowItemProps, 'useRemoteAccess' | 'useWorkspaceAccess' | 'openWorkspaceMenu' | 'useContextMenuTarget' | 'useContextMenu'>
+  & Partial<Pick<WorkspaceHeaderRowItemProps, 'useRemoteAccess' | 'useWorkspaceAccess' | 'openWorkspaceMenu' | 'useContextMenuTarget' | 'useContextMenu'>>) {
+  return <WorkspaceHeaderRowItemComponent {...props} useRemoteAccess={useRemoteAccess} useWorkspaceAccess={useWorkspaceAccess}
     useContextMenu={props.useContextMenu ?? contextMenuHook((target, point) => { if (target.kind === 'workspace') openWorkspaceMenu(target.value.workspaceId, target.value.path, target.value.displayTitle, point) })} openWorkspaceMenu={openWorkspaceMenu} useContextMenuTarget={useContextMenuTarget} />
+}
+
+// Direct project-header specs hold an empty capture target unless the case opens a menu.
+function ProjectNodeItem({
+  openProjectMenu = vi.fn(), useContextMenuTarget = select => select(null), ...props
+}: Omit<ProjectNodeItemProps, 'openProjectMenu' | 'useContextMenuTarget' | 'useContextMenu'>
+  & Partial<Pick<ProjectNodeItemProps, 'openProjectMenu' | 'useContextMenuTarget' | 'useContextMenu'>>) {
+  return <ProjectNodeItemComponent {...props} openProjectMenu={openProjectMenu} useContextMenuTarget={useContextMenuTarget}
+    useContextMenu={props.useContextMenu ?? contextMenuHook()} />
 }
 
 /** Half detection reads the row rect; jsdom rects are all-zero by default. */
@@ -112,9 +123,9 @@ describe('Workspace and Session hover handoff', () => {
         runningSubagentCount: 0, completed: false, updatedAt: 0, pinned: false, archived: false,
       }
       render(<HoverCardGroup>
-        <ProjectRowItem group={workspace('Workspace A')} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />
+        <WorkspaceHeaderRowItem group={workspace('Workspace A')} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />
         <SessionNodeItem node={session} currentId={undefined} now={0} onOpen={vi.fn()} t={t} />
-        <ProjectRowItem group={workspace('Workspace B')} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />
+        <WorkspaceHeaderRowItem group={workspace('Workspace B')} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />
       </HoverCardGroup>)
       const a = { anchor: screen.getByText('Workspace A'), copy: '/projects/Workspace A' }
       const b = { anchor: screen.getByText('Workspace B'), copy: '/projects/Workspace B' }
@@ -166,7 +177,7 @@ describe('native row drag previews', () => {
   function fixture(kind: 'workspace' | 'session') {
     const drag = dragProps()
     const view = render(kind === 'workspace'
-      ? <ProjectRowItem group={{
+      ? <WorkspaceHeaderRowItem group={{
         key: 'workspace', workspaceId: wid('workspace'), cwd: '/workspace', createdAt: 0,
         label: 'Draggable row', sessionCount: 0, expanded: true, containsCurrent: false, sessions: [],
       }} onToggle={vi.fn()} onCreate={vi.fn()} drag={drag} t={t} />
@@ -344,7 +355,7 @@ describe('workspace browser rows', () => {
       key: 'project', workspaceId: wid('project'), cwd: '/projects/project', createdAt: 0, label: 'Project',
       sessionCount: 1, expanded: true, containsCurrent: true, sessions: [],
     }
-    render(<ProjectRowItem group={group} onToggle={onToggle} onCreate={onCreate} t={t}
+    render(<WorkspaceHeaderRowItem group={group} onToggle={onToggle} onCreate={onCreate} t={t}
       newShortcut={{ id: 'session.new' as never, label: 'New', aliases: [], binding: null,
         keys: ['Ctrl', 'N'], aria: 'Control+N', modified: true, conflicts: [], issue: null }} />)
 
@@ -661,13 +672,14 @@ describe('workspace browser rows', () => {
       key: 'project', workspaceId: wid('project'), cwd: '/projects/project', createdAt: 0, label: 'Project',
       sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
     }
-    const view = render(<ProjectRowItem group={group} onToggle={onToggle} onCreate={vi.fn()} openWorkspaceMenu={openWorkspaceMenu} t={t} />)
+    const view = render(<WorkspaceHeaderRowItem group={group} onToggle={onToggle} onCreate={vi.fn()}
+      openWorkspaceMenu={openWorkspaceMenu} t={t} />)
     fireEvent.contextMenu(screen.getByRole('treeitem'), { clientX: 36, clientY: 48 })
     expect(openWorkspaceMenu).toHaveBeenLastCalledWith(wid('project'), '/projects/project', 'Project', { x: 36, y: 48 })
     fireEvent.click(screen.getByRole('button', { name: '工作区“Project”的操作' }))
     expect(openWorkspaceMenu).toHaveBeenLastCalledWith(wid('project'), '/projects/project', 'Project', { x: 0, y: 0 }, 'toggle')
     expect(onToggle).not.toHaveBeenCalled()
-    view.rerender(<ProjectRowItem group={group} onToggle={onToggle} onCreate={vi.fn()} t={t}
+    view.rerender(<WorkspaceHeaderRowItem group={group} onToggle={onToggle} onCreate={vi.fn()} t={t}
       useContextMenuTarget={select => select({ kind: 'workspace', value: { workspaceId: wid('project'), path: group.cwd!, displayTitle: 'Project' } })} />)
     expect(screen.getByRole('button', { name: '工作区“Project”的操作' }).getAttribute('aria-expanded')).toBe('true')
   })
@@ -683,21 +695,21 @@ describe('workspace browser rows', () => {
     const props = {
       group, onToggle: vi.fn(), onCreate: vi.fn(), drag, t,
     }
-    const view = render(<ProjectRowItem {...props} useWorkspaceAccess={useWorkspaceAccess} />)
+    const view = render(<WorkspaceHeaderRowItem {...props} useWorkspaceAccess={useWorkspaceAccess} />)
     expect(useWorkspaceAccess).toHaveBeenCalledWith(wid('project'), 'session/create')
     // Mutations stay gated while the menu remains available for file-manager and plugin actions.
     expect(screen.queryByRole('button', { name: '在“Project”中新建会话' })).toBeNull()
     expect(screen.getByRole('treeitem').getAttribute('draggable')).toBe('false')
     expect(screen.getByRole('button', { name: '工作区“Project”的操作' })).toBeTruthy()
     allowed.clear()
-    view.rerender(<ProjectRowItem {...props} useWorkspaceAccess={useWorkspaceAccess} />)
+    view.rerender(<WorkspaceHeaderRowItem {...props} useWorkspaceAccess={useWorkspaceAccess} />)
     expect(screen.getByRole('button', { name: '工作区“Project”的操作' })).toBeTruthy()
 
     // Every answer allowed restores the button, the full menu, and the drag handle.
     for (const endpoint of ['session/create', 'workspace/rename', 'workspace/delete', 'workspace/insertBefore']) {
       allowed.add(endpoint)
     }
-    view.rerender(<ProjectRowItem {...props} useWorkspaceAccess={useWorkspaceAccess} />)
+    view.rerender(<WorkspaceHeaderRowItem {...props} useWorkspaceAccess={useWorkspaceAccess} />)
     expect(screen.getByRole('treeitem').getAttribute('draggable')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: '在“Project”中新建会话' }))
     expect(props.onCreate).toHaveBeenCalledOnce()
@@ -710,7 +722,7 @@ describe('workspace browser rows', () => {
     }
     const useRemoteAccess = vi.fn((action: string) => action !== 'session/create')
     const useWorkspaceAccess = vi.fn(() => true)
-    render(<ProjectRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t}
+    render(<WorkspaceHeaderRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t}
       useRemoteAccess={useRemoteAccess} useWorkspaceAccess={useWorkspaceAccess} />)
     expect(useRemoteAccess).toHaveBeenCalledWith('session/create')
     expect(useWorkspaceAccess).not.toHaveBeenCalled()
@@ -753,7 +765,7 @@ describe('workspace browser rows', () => {
         key: 'project', workspaceId: wid('project'), cwd: '/projects/project', createdAt: 0, label: 'Project',
         sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
       }
-      render(<ProjectRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
+      render(<WorkspaceHeaderRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
       act(() => { vi.advanceTimersByTime(800) })
       // Card body: full title + cwd + absolute creation time.
@@ -776,7 +788,7 @@ describe('workspace browser rows', () => {
         key: 'project', workspaceId: wid('project'), cwd: '/projects/project', createdAt: 0, label: 'Project',
         sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
       }
-      render(<ProjectRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
+      render(<WorkspaceHeaderRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
       const row = screen.getByRole('treeitem')
       const create = screen.getByRole('button', { name: '在“Project”中新建会话' })
       fireEvent.pointerEnter(row.parentElement as HTMLElement)
@@ -809,7 +821,7 @@ describe('workspace browser rows', () => {
         key: 'project', workspaceId: wid('project'), cwd: '/projects/project', createdAt: 0, label: 'Project',
         sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
       }
-      render(<ProjectRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
+      render(<WorkspaceHeaderRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
       const row = screen.getByRole('treeitem')
       const create = screen.getByRole('button', { name: '在“Project”中新建会话' })
       fireEvent.pointerEnter(row.parentElement as HTMLElement)
@@ -835,7 +847,7 @@ describe('workspace browser rows', () => {
         key: 'project', workspaceId: wid('project'), cwd: '/home/u/Documents/project', createdAt: 0, label: 'Project',
         sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
       }
-      render(<ProjectRowItem group={group} home="/home/u" onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
+      render(<WorkspaceHeaderRowItem group={group} home="/home/u" onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
       act(() => { vi.advanceTimersByTime(800) })
       expect(screen.getByText('~/Documents/project')).toBeTruthy()
@@ -855,7 +867,7 @@ describe('workspace browser rows', () => {
         key: 'project', workspaceId: wid('project'), cwd: undefined, createdAt: 0, label: 'Project',
         sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
       }
-      render(<ProjectRowItem group={group} home="/home/u" onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
+      render(<WorkspaceHeaderRowItem group={group} home="/home/u" onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
       act(() => { vi.advanceTimersByTime(800) })
       expect(screen.getAllByText('Project')).toHaveLength(2)
@@ -873,7 +885,7 @@ describe('workspace browser rows', () => {
         key: 'project', workspaceId: wid('project'), cwd: 'C:\\Users\\u\\project', createdAt: 0, label: 'Project',
         sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
       }
-      render(<ProjectRowItem group={group} home="C:\\Users\\u" onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
+      render(<WorkspaceHeaderRowItem group={group} home="C:\\Users\\u" onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
       fireEvent.pointerEnter(screen.getByRole('treeitem').parentElement as HTMLElement)
       act(() => { vi.advanceTimersByTime(800) })
       expect(screen.getByText('C:\\Users\\u\\project')).toBeTruthy()
@@ -887,7 +899,7 @@ describe('workspace browser rows', () => {
       key: '', workspaceId: undefined, cwd: undefined, createdAt: undefined, label: 'Ungrouped',
       sessionCount: 0, expanded: false, containsCurrent: false, sessions: [],
     }
-    render(<ProjectRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
+    render(<WorkspaceHeaderRowItem group={group} onToggle={vi.fn()} onCreate={vi.fn()} t={t} />)
     expect(screen.queryByRole('button', { name: /工作区/ })).toBeNull()
   })
 
@@ -1534,4 +1546,66 @@ it.each([['未命名', t], ['Untitled', tEn]])('labels unnamed search results as
     onUnarchive={vi.fn()} useSessionAccess={allowAllAccess.useSessionAccess} t={translate} />)
   fireEvent.click(screen.getByText(label))
   expect(onOpen).toHaveBeenCalledWith(result.id)
+})
+
+describe('project header row', () => {
+  const project = (overrides: Partial<ProjectNode> = {}): ProjectNode => ({
+    key: 'p1', projectId: 'p1' as ProjectId, title: 'Alpha project', workspaceCount: 3,
+    expanded: true, containsCurrent: false, workspaces: [], ...overrides,
+  })
+
+  it('shows the title, the Workspace count, and the disclosure state', () => {
+    render(<ProjectNodeItem project={project()} onToggle={vi.fn()} t={t} />)
+    const row = screen.getByRole('treeitem')
+    expect(row.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('Alpha project')).toBeTruthy()
+    // The visible badge carries the number; the count sentence is read out.
+    expect(row.textContent).toContain('3')
+    expect(screen.getByText('3 个工作区')).toBeTruthy()
+    fireEvent.click(row)
+  })
+
+  it('collapses through the row and reads the localized unassigned label', () => {
+    const onToggle = vi.fn()
+    render(<ProjectNodeItem project={project({ expanded: false, ...{ projectId: undefined, key: '', title: '' } })} onToggle={onToggle} t={t} />)
+    const row = screen.getByRole('treeitem')
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByText('未归类')).toBeTruthy()
+    expect(screen.queryByRole('button')).toBeNull()
+    fireEvent.click(row)
+    expect(onToggle).toHaveBeenCalledOnce()
+  })
+
+  it('opens the captured project menu from the hover button without toggling the row', () => {
+    const onToggle = vi.fn()
+    const openProjectMenu = vi.fn()
+    render(<ProjectNodeItem project={project()} onToggle={onToggle} openProjectMenu={openProjectMenu} t={t} />)
+    const button = screen.getByRole('button', { name: '项目“Alpha project”的操作' })
+    expect(button).toBeTruthy()
+    fireEvent.click(button)
+    expect(onToggle).not.toHaveBeenCalled()
+    expect(openProjectMenu).toHaveBeenCalledExactlyOnceWith('p1', 'Alpha project', 3, { x: 0, y: 0 }, 'toggle')
+  })
+
+  it('keeps the menu button visible while its menu is open', () => {
+    render(<ProjectNodeItem project={project()} onToggle={vi.fn()} t={t}
+      useContextMenuTarget={select => select({ kind: 'project', value: { projectId: 'p1' as ProjectId, title: 'Alpha project', workspaceCount: 3 } })} />)
+    expect(screen.getByRole('button', { name: '项目“Alpha project”的操作' }).getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('captures the project header through the shared right-click gesture', () => {
+    const open = vi.fn()
+    render(<ProjectNodeItem project={project()} onToggle={vi.fn()} t={t}
+      useContextMenu={contextMenuHook(open)} />)
+    fireEvent.contextMenu(screen.getByRole('treeitem'), { clientX: 24, clientY: 36 })
+    expect(open).toHaveBeenCalledWith(
+      { kind: 'project', value: { projectId: 'p1', title: 'Alpha project', workspaceCount: 3 } },
+      { x: 24, y: 36 },
+    )
+  })
+
+  it('translates the count through both plural forms', () => {
+    render(<ProjectNodeItem project={project({ workspaceCount: 1 })} onToggle={vi.fn()} t={tEn} />)
+    expect(screen.getByText('1 workspace')).toBeTruthy()
+  })
 })

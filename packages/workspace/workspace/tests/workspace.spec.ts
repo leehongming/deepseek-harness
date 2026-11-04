@@ -14,12 +14,15 @@ import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence
 import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import { MemoryMediaPool, MemoryStorageBackend } from '../../../storage/storage-domain/tests/helpers/memory-backend.ts'
 import WorkspaceRegistry, {
+  ProjectId,
+  ProjectNotFoundError,
+  ProjectTitleConflictError,
   WorkspaceId,
   type workspaceDomainState,
   WorkspaceMoveInvalidError,
   WorkspaceOrderInvalidError,
 } from '../src/index.ts'
-import type { WorkspaceDomainState, WorkspaceRecord } from '../src/index.ts'
+import type { ProjectRecord, WorkspaceDomainState, WorkspaceRecord } from '../src/index.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath } from '../src/paths.ts'
 import * as workspacePaths from '../src/paths.ts'
 
@@ -1545,3 +1548,150 @@ declare module '@deepseek-ai/dsh-workspace/types' {
     'probe-items': true
   }
 }
+
+describe('WorkspaceRegistry projects', () => {
+  const projectState = (pool: MemoryMediaPool): { projects: ProjectRecord[] } =>
+    pool.media.get('project')!.global as { projects: ProjectRecord[] }
+
+  it('creates newest-first, notifies once per write, and reloads the durable order', async () => {
+    const h = await harness()
+    expect(h.changes.filter(change => change.domain === 'project')).toEqual([])
+    const first = await h.registry.createProject('Alpha')
+    const second = await h.registry.createProject('Beta')
+    expect(first.id).not.toBe(second.id)
+    expect(h.registry.listProjects().map(project => project.title)).toEqual(['Beta', 'Alpha'])
+    expect(h.registry.getProject(first.id)).toEqual(first)
+    expect(h.registry.getProject(ProjectId('missing'))).toBeUndefined()
+    const changes = h.changes.filter(change => change.domain === 'project')
+    expect(changes).toHaveLength(2)
+    expect(changes[0]).toMatchObject({ domain: 'project', table: '', key: '', operation: 'put' })
+    expect(projectState(h.pool).projects.map(project => project.title)).toEqual(['Beta', 'Alpha'])
+
+    await h.fiber.dispose()
+    const nextFiber = await h.ctx.plugin(WorkspaceRegistry)
+    expect(h.ctx.workspaceRegistry.listProjects().map(project => project.title)).toEqual(['Beta', 'Alpha'])
+    await nextFiber.dispose()
+  })
+
+  it('rejects blank and duplicate titles, including on rename', async () => {
+    const h = await harness()
+    await expect(h.registry.createProject('   ')).rejects.toThrow(TypeError)
+    const alpha = await h.registry.createProject('Alpha')
+    const beta = await h.registry.createProject('Beta')
+    await expect(h.registry.createProject('Alpha')).rejects.toThrow(ProjectTitleConflictError)
+    await expect(h.registry.renameProject(beta.id, 'Alpha')).rejects.toThrow(ProjectTitleConflictError)
+    await expect(h.registry.renameProject(beta.id, '  ')).rejects.toThrow(TypeError)
+    await expect(h.registry.renameProject(ProjectId('missing'), 'Gamma')).rejects.toThrow(ProjectNotFoundError)
+
+    // Renaming to the current title is a no-op that writes and notifies nothing.
+    const before = h.changes.length
+    const updatedAt = beta.updatedAt
+    await expect(h.registry.renameProject(beta.id, 'Beta')).resolves.toMatchObject({ title: 'Beta' })
+    expect(h.changes).toHaveLength(before)
+    expect(projectState(h.pool).projects.find(project => project.id === beta.id)!.updatedAt).toBe(updatedAt)
+
+    const renamed = await h.registry.renameProject(beta.id, 'Gamma')
+    expect(renamed.title).toBe('Gamma')
+    expect(h.registry.listProjects().map(project => project.title)).toEqual(['Gamma', 'Alpha'])
+    expect(h.registry.getProject(alpha.id)?.title).toBe('Alpha')
+  })
+
+  it('deletes projects without touching their Workspaces and reports unknown ids', async () => {
+    const dir = await makeDir('project-delete')
+    const h = await harness()
+    const project = await h.registry.createProject('Alpha')
+    const workspace = await h.registry.create(dir)
+    await h.registry.assignWorkspaceToProject(workspace.id, project.id)
+    expect(h.registry.listProjects()[0]!.workspaceIds).toEqual([workspace.id])
+
+    await expect(h.registry.deleteProject(project.id)).resolves.toBe(true)
+    await expect(h.registry.deleteProject(project.id)).resolves.toBe(false)
+    expect(h.registry.listProjects()).toEqual([])
+    expect(h.registry.get(workspace.id)).toBeDefined()
+    expect(h.registry.list()).toEqual([workspace])
+    await expect(h.registry.assignWorkspaceToProject(workspace.id, project.id))
+      .rejects.toThrow(ProjectNotFoundError)
+  })
+
+  it('moves a Workspace between projects in one write and keeps membership single-owner', async () => {
+    const firstDir = await makeDir('project-first')
+    const secondDir = await makeDir('project-second')
+    const h = await harness()
+    const alpha = await h.registry.createProject('Alpha')
+    const beta = await h.registry.createProject('Beta')
+    const first = await h.registry.create(firstDir)
+    const second = await h.registry.create(secondDir)
+
+    await h.registry.assignWorkspaceToProject(first.id, alpha.id)
+    await h.registry.assignWorkspaceToProject(second.id, alpha.id)
+    // Assignment appends, so stored membership follows assignment order; the
+    // browser renders project workspaces in the registry order instead.
+    expect(h.registry.listProjects().find(project => project.id === alpha.id)!.workspaceIds)
+      .toEqual([first.id, second.id])
+
+    await h.registry.assignWorkspaceToProject(first.id, beta.id)
+    const projects = h.registry.listProjects()
+    expect(projects.find(project => project.id === alpha.id)!.workspaceIds).toEqual([second.id])
+    expect(projects.find(project => project.id === beta.id)!.workspaceIds).toEqual([first.id])
+    expect(projectState(h.pool).projects.flatMap(project => project.workspaceIds)
+      .filter(id => id === first.id)).toHaveLength(1)
+
+    await h.registry.assignWorkspaceToProject(second.id)
+    expect(h.registry.listProjects().find(project => project.id === alpha.id)!.workspaceIds).toEqual([])
+    expect(h.registry.listProjects().find(project => project.id === beta.id)!.workspaceIds).toEqual([first.id])
+  })
+
+  it('writes nothing when the Workspace already belongs to the target project', async () => {
+    const dir = await makeDir('project-idempotent')
+    const h = await harness()
+    const project = await h.registry.createProject('Alpha')
+    const workspace = await h.registry.create(dir)
+    await h.registry.assignWorkspaceToProject(workspace.id, project.id)
+    const before = h.changes.length
+    const updatedAt = h.registry.listProjects()[0]!.updatedAt
+    await h.registry.assignWorkspaceToProject(workspace.id, project.id)
+    expect(h.changes).toHaveLength(before)
+    expect(h.registry.listProjects()[0]!.updatedAt).toBe(updatedAt)
+  })
+
+  it('projects away membership of deleted Workspaces and prunes it on the next write', async () => {
+    const firstDir = await makeDir('project-prune-first')
+    const secondDir = await makeDir('project-prune-second')
+    const h = await harness()
+    const alpha = await h.registry.createProject('Alpha')
+    const first = await h.registry.create(firstDir)
+    const second = await h.registry.create(secondDir)
+    await h.registry.assignWorkspaceToProject(first.id, alpha.id)
+    await h.registry.assignWorkspaceToProject(second.id, alpha.id)
+
+    await h.registry.delete(first.id)
+    expect(h.registry.listProjects()[0]!.workspaceIds).toEqual([second.id])
+    expect(projectState(h.pool).projects[0]!.workspaceIds).toEqual([first.id, second.id])
+
+    await h.registry.assignWorkspaceToProject(second.id, alpha.id)
+    expect(projectState(h.pool).projects[0]!.workspaceIds).toEqual([second.id])
+  })
+
+  it('rejects stored project state that breaks the membership invariants', async () => {
+    const media = (projects: ProjectRecord[]): MemoryMediaPool => {
+      const pool = new MemoryMediaPool()
+      pool.versions.set('project', 1)
+      pool.media.set('project', { tables: new Map(), global: { projects } })
+      return pool
+    }
+    const record = (id: string, title: string, workspaceIds: string[]): ProjectRecord => ({
+      id: ProjectId(id),
+      title,
+      workspaceIds: workspaceIds.map(WorkspaceId),
+      createdAt: '2026-07-24T00:00:00.000Z',
+      updatedAt: '2026-07-24T00:00:00.000Z',
+    })
+
+    await expect(harness({ pool: media([record('one', 'Alpha', ['w1']), record('two', 'Beta', ['w1'])]) }))
+      .rejects.toThrow('claimed by both')
+    await expect(harness({ pool: media([record('one', 'Alpha', []), record('two', 'Alpha', [])]) }))
+      .rejects.toThrow('duplicate title')
+    await expect(harness({ pool: media([record('one', 'Alpha', []), record('one', 'Beta', [])]) }))
+      .rejects.toThrow('duplicate project')
+  })
+})

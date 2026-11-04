@@ -1,7 +1,7 @@
 /**
- * Workspace entity registry (`ctx.workspaceRegistry`): durable workspace records,
- * stable registry order, and header-validated session membership over the
- * domain data form.
+ * Workspace entity registry (`ctx.workspaceRegistry`): durable workspace
+ * records, stable registry order, header-validated session membership, and the
+ * durable project grouping above Workspaces — all over the domain data form.
  * @module @deepseek-ai/dsh-workspace
  */
 
@@ -16,19 +16,28 @@ import type { WorkspaceEntityHost } from './entity.ts'
 
 export { WorkspaceMoveInvalidError } from './entity.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath, realpathNormalize } from './paths.ts'
+import { projectDomainSpec } from './project-spec.ts'
+import type { ProjectDomainState, ProjectRecord } from './project-spec.ts'
 import { workspaceDomainSpec } from './spec.ts'
 import type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
-import type { SessionActivity, Workspace, WorkspaceId as WorkspaceIdBrand } from './types.ts'
+import type {
+  Project, ProjectId as ProjectIdBrand, SessionActivity, Workspace, WorkspaceId as WorkspaceIdBrand,
+} from './types.ts'
 
 export type {
-  SessionActivity, SessionActivityItem, SessionActivityKind, SessionActivityKindMap, Workspace,
+  Project, SessionActivity, SessionActivityItem, SessionActivityKind, SessionActivityKindMap, Workspace,
 } from './types.ts'
+export { projectDomainSpec, projectDomainState, projectRecord } from './project-spec.ts'
+export type { ProjectDomainState, ProjectRecord } from './project-spec.ts'
 export { workspaceDomainState, workspaceRecord, workspaceDomainSpec } from './spec.ts'
 export type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
 export { realpathNormalize } from './paths.ts'
 
 /** Identifies one workspace record (see `src/types.ts` for the brand rationale). */
 export type WorkspaceId = WorkspaceIdBrand
+
+/** Identifies one project record (see `src/types.ts` for the brand rationale). */
+export type ProjectId = ProjectIdBrand
 
 /**
  * Brand a string as a {@link WorkspaceId}.
@@ -37,6 +46,15 @@ export type WorkspaceId = WorkspaceIdBrand
  */
 export function WorkspaceId(id: string): WorkspaceId {
   return id as WorkspaceId
+}
+
+/**
+ * Brand a string as a {@link ProjectId}.
+ * @param id - Raw project id string.
+ * @returns the same string, branded at compile time.
+ */
+export function ProjectId(id: string): ProjectId {
+  return id as ProjectId
 }
 
 /**
@@ -90,6 +108,28 @@ export class WorkspaceOrderInvalidError extends Error {
   constructor(readonly workspaceId: WorkspaceId) {
     super(`cannot reorder unknown workspace '${workspaceId}'`)
     this.name = 'WorkspaceOrderInvalidError'
+  }
+}
+
+/** A project mutation named a project the durable registry does not hold. */
+export class ProjectNotFoundError extends Error {
+  /**
+   * @param projectId - The unknown project id.
+   */
+  constructor(readonly projectId: ProjectId) {
+    super(`unknown project '${projectId}'`)
+    this.name = 'ProjectNotFoundError'
+  }
+}
+
+/** A project create or rename requested a title another project already uses. */
+export class ProjectTitleConflictError extends Error {
+  /**
+   * @param title - The title already in use.
+   */
+  constructor(readonly title: string) {
+    super(`project title '${title}' is already in use`)
+    this.name = 'ProjectTitleConflictError'
   }
 }
 
@@ -173,12 +213,15 @@ export class WorkspaceRegistry extends Service {
   private table?: KvTable<WorkspaceId, WorkspaceRecord>
   private global?: DomainGlobal<WorkspaceDomainState>
   private state?: WorkspaceDomainState
+  private projectGlobal?: DomainGlobal<ProjectDomainState>
+  private projectState?: ProjectDomainState
   private readonly entities = new Map<WorkspaceId, WorkspaceEntity>()
   private readonly headers = new Map<SessionId, SessionHeader>()
   private readonly sessionPaths = new Map<SessionId, string>()
   private readonly missingSessionPaths = new Set<SessionId>()
   private readonly invalidSessionPaths = new Map<SessionId, string>()
   private operationTail: Promise<void> = Promise.resolve()
+  private projectOperationTail: Promise<void> = Promise.resolve()
 
   private readonly host: WorkspaceEntityHost = {
     table: () => this.requireTable(),
@@ -217,6 +260,7 @@ export class WorkspaceRegistry extends Service {
     this.validateStoredState(this.requireState())
     this.rebuildEntities()
     this.reportFilteredCandidates()
+    await this.openProjectDomain()
   }
 
   /**
@@ -332,6 +376,126 @@ export class WorkspaceRegistry extends Service {
       if (sameIds(workspaceIds, state.workspaceIds)) return state.workspaceIds
       await this.setState({ ...state, workspaceIds })
       return workspaceIds
+    })
+  }
+
+  /**
+   * Projects in durable display order (newest created first). Membership is
+   * projected against the current Workspace set, so a deleted Workspace never
+   * appears in a project even before its stale id is pruned by a write.
+   * @returns a fresh ordered array of project projections.
+   */
+  listProjects(): Project[] {
+    return this.requireProjectState().projects.map(record => this.projectView(record))
+  }
+
+  /**
+   * Look up one project by id.
+   * @param id - Project id.
+   * @returns the project projection, or `undefined` when unknown.
+   */
+  getProject(id: ProjectId): Project | undefined {
+    const record = this.requireProjectState().projects.find(project => project.id === id)
+    return record === undefined ? undefined : this.projectView(record)
+  }
+
+  /**
+   * Create one empty project at the front of the display order.
+   * @param title - Non-blank display title unique across projects.
+   * @returns the durable project projection.
+   * @throws {TypeError} when the title is blank.
+   * @throws {ProjectTitleConflictError} when another project already uses the title.
+   */
+  createProject(title: string): Promise<Project> {
+    return this.enqueueProject(async () => {
+      const state = this.requireProjectState()
+      this.requireProjectTitle(title, state)
+      const now = new Date().toISOString()
+      const record: ProjectRecord = {
+        id: ProjectId(randomUUID()),
+        title,
+        workspaceIds: [],
+        createdAt: now,
+        updatedAt: now,
+      }
+      await this.setProjectState({ projects: [record, ...state.projects] })
+      return this.projectView(record)
+    })
+  }
+
+  /**
+   * Replace one project's display title. Renaming keeps membership, identity,
+   * and order.
+   * @param id - Project to rename.
+   * @param title - Non-blank display title unique across projects.
+   * @returns the renamed project projection.
+   * @throws {ProjectNotFoundError} when no project carries that id.
+   * @throws {TypeError} when the title is blank.
+   * @throws {ProjectTitleConflictError} when another project already uses the title.
+   */
+  renameProject(id: ProjectId, title: string): Promise<Project> {
+    return this.enqueueProject(async () => {
+      const state = this.requireProjectState()
+      const index = state.projects.findIndex(project => project.id === id)
+      const current = state.projects[index]
+      if (current === undefined) throw new ProjectNotFoundError(id)
+      this.requireProjectTitle(title, state, id)
+      if (current.title === title) return this.projectView(current)
+      const renamed: ProjectRecord = { ...current, title, updatedAt: new Date().toISOString() }
+      const projects = state.projects.map((project, position) => position === index ? renamed : project)
+      await this.setProjectState({ projects })
+      return this.projectView(renamed)
+    })
+  }
+
+  /**
+   * Delete one project. Member Workspaces become ungrouped; their records,
+   * directories, and Sessions are untouched. Unknown ids are an idempotent
+   * no-op for domain callers.
+   * @param id - Project to remove.
+   * @returns `true` when a project was deleted, `false` when it was unknown.
+   */
+  deleteProject(id: ProjectId): Promise<boolean> {
+    return this.enqueueProject(async () => {
+      const state = this.requireProjectState()
+      if (!state.projects.some(project => project.id === id)) return false
+      await this.setProjectState({ projects: state.projects.filter(project => project.id !== id) })
+      return true
+    })
+  }
+
+  /**
+   * Move one Workspace into a project, append it to that project's members, or
+   * ungroup it. The workspace's membership in any other project is dropped in
+   * the same write, so a Workspace never belongs to two projects. A workspace
+   * already belonging to the target resolves without writing.
+   * @param workspaceId - Workspace whose membership changes.
+   * @param projectId - Target project; omitted ungroups the Workspace.
+   * @returns resolution after durability.
+   * @throws {ProjectNotFoundError} when the target project is unknown.
+   */
+  assignWorkspaceToProject(workspaceId: WorkspaceId, projectId?: ProjectId): Promise<void> {
+    return this.enqueueProject(async () => {
+      const state = this.requireProjectState()
+      if (projectId !== undefined && !state.projects.some(project => project.id === projectId)) {
+        throw new ProjectNotFoundError(projectId)
+      }
+      const now = new Date().toISOString()
+      const projects = state.projects.map((project) => {
+        // Every record the mutation writes repairs membership that outlived a
+        // deleted Workspace registration; untouched records stay byte-identical.
+        const pruned = project.workspaceIds.filter(id => this.entities.has(id))
+        const isTarget = project.id === projectId
+        const hadMember = project.workspaceIds.includes(workspaceId)
+        const workspaceIds = isTarget
+          ? (hadMember ? pruned : [...pruned.filter(id => id !== workspaceId), workspaceId])
+          : pruned.filter(id => id !== workspaceId)
+        return sameIds(workspaceIds, project.workspaceIds)
+          ? project
+          : { ...project, workspaceIds, updatedAt: now }
+      })
+      if (projects.every((project, index) => project === state.projects[index])) return
+      await this.setProjectState({ projects })
     })
   }
 
@@ -505,6 +669,93 @@ export class WorkspaceRegistry extends Service {
       if (entity.path === canonical) return entity
     }
     return undefined
+  }
+
+  /**
+   * Open the project domain once, after the Workspace cache is built, and
+   * reject stored state that breaks the membership invariants.
+   */
+  private async openProjectDomain(): Promise<void> {
+    const domain = await this.ctx.storageDomain.open(projectDomainSpec)
+    this.ctx.effect(() => () => domain.close(), 'workspace.projectDomainClose')
+    this.projectGlobal = domain.global
+    this.projectState = domain.global.get()
+    this.validateProjects(this.projectState)
+  }
+
+  /** Project a stored project record, dropping Workspace ids whose registration is gone. */
+  private projectView(record: ProjectRecord): Project {
+    return {
+      id: record.id,
+      title: record.title,
+      workspaceIds: record.workspaceIds.filter(id => this.entities.has(id)),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    }
+  }
+
+  /**
+   * Reject a title that is blank or already used by another project. Decided
+   * on the project write chain, so a concurrent create or rename cannot
+   * interleave between the check and the write.
+   * @param title - Proposed title.
+   * @param state - Project state observed on the write chain.
+   * @param except - Project whose current title must not count as a conflict.
+   */
+  private requireProjectTitle(title: string, state: ProjectDomainState, except?: ProjectId): void {
+    if (title.trim() === '') throw new TypeError('project title must not be blank')
+    if (state.projects.some(project => project.id !== except && project.title === title)) {
+      throw new ProjectTitleConflictError(title)
+    }
+  }
+
+  /**
+   * Fail loud on stored project state whose invariants the write path cannot
+   * repair: duplicate ids or titles, or a Workspace claimed by two projects.
+   * Workspace ids whose registration no longer exists are stale membership,
+   * not corruption: they are projected away and pruned by the next write.
+   * @param state - Stored project state just loaded.
+   */
+  private validateProjects(state: ProjectDomainState): void {
+    const ids = new Set<ProjectId>()
+    const titles = new Set<string>()
+    const owners = new Map<WorkspaceId, ProjectId>()
+    for (const project of state.projects) {
+      if (ids.has(project.id)) {
+        throw new Error(`project domain is inconsistent: duplicate project '${project.id}'`)
+      }
+      ids.add(project.id)
+      if (titles.has(project.title)) {
+        throw new Error(`project domain is inconsistent: duplicate title '${project.title}'`)
+      }
+      titles.add(project.title)
+      for (const workspaceId of project.workspaceIds) {
+        const holder = owners.get(workspaceId)
+        if (holder !== undefined) {
+          throw new Error(
+            `project domain is inconsistent: workspace '${workspaceId}' is claimed `
+            + `by both project '${holder}' and project '${project.id}'`,
+          )
+        }
+        owners.set(workspaceId, project.id)
+      }
+    }
+  }
+
+  private requireProjectState(): ProjectDomainState {
+    if (this.projectState === undefined) throw new Error('workspace registry is not started yet')
+    return this.projectState
+  }
+
+  private async setProjectState(state: ProjectDomainState): Promise<void> {
+    await (this.projectGlobal as DomainGlobal<ProjectDomainState>).set(state)
+    this.projectState = state
+  }
+
+  private enqueueProject<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.projectOperationTail.then(operation)
+    this.projectOperationTail = result.then(() => {}, () => {})
+    return result
   }
 
   private async createCanonical(canonical: string, title?: string, firstUse = false): Promise<WorkspaceEntity> {

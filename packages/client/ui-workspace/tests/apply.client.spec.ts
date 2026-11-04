@@ -7,7 +7,9 @@ import type {
   ISessions, SessionListState, SessionReference, SessionSnapshot, SessionSummary,
 } from '@deepseek-ai/dsh-api-session-controller/client'
 import { SessionForkError } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { WorkspaceId, WorkspaceSnapshot, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type {
+  ProjectId, ProjectView, WorkspaceId, WorkspaceSnapshot, WorkspaceView,
+} from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { HostObservable, PropsRenderSlots, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
@@ -46,12 +48,17 @@ const workspace = (id: string, sessionIds: readonly string[]): WorkspaceView => 
   workspaceId: id as WorkspaceId, path: `/projects/${id}`, title: id,
   sessionIds: sessionIds.map(sid), createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
 })
+const project = (id: string, title: string, workspaceIds: readonly string[] = []): ProjectView => ({
+  projectId: id as ProjectId, title, workspaceIds: workspaceIds.map(workspace => workspace as WorkspaceId),
+  createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+})
 const workspaceState = (
   items: readonly WorkspaceView[],
   archivedSessionIds: readonly SessionId[] = [],
   pinnedSessionIds: readonly SessionId[] = [],
+  projects: readonly ProjectView[] = [],
 ): WorkspaceSnapshot => ({
-  items, archivedSessionIds, pinnedSessionIds, state: 'idle', phase: 'ready', error: null,
+  items, archivedSessionIds, pinnedSessionIds, projects, state: 'idle', phase: 'ready', error: null,
 })
 
 const ALLOWED: HostObservable<boolean> = createSnapshotStore(true)
@@ -130,6 +137,16 @@ async function bench(access: 'fake' | 'static' = 'fake') {
   const subscribe = () => () => {}
   const workspacesSubscribe = vi.fn(subscribe)
   const initializeDefault = vi.fn(async (): Promise<WorkspaceView | undefined> => undefined)
+  const createProject = vi.fn(async (title: string) => ({
+    projectId: 'project-new' as never, title, workspaceIds: [],
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  }))
+  const renameProject = vi.fn(async (_projectId: string, title: string) => ({
+    projectId: 'project-new' as never, title, workspaceIds: [],
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  }))
+  const deleteProject = vi.fn(async () => undefined)
+  const assignWorkspaceProject = vi.fn(async () => undefined)
   ctx.provide('workspaces', {
     list: { getSnapshot: () => workspaceSnapshot, subscribe: workspacesSubscribe },
     create,
@@ -142,6 +159,10 @@ async function bench(access: 'fake' | 'static' = 'fake') {
     pinSession,
     unpinSession,
     insertSessionBefore: vi.fn(async () => ({})),
+    createProject,
+    renameProject,
+    deleteProject,
+    assignWorkspaceProject,
   } as never)
   ctx.provide('sessions', {
     list: { getSnapshot: () => sessionSnapshot, subscribe },
@@ -171,6 +192,7 @@ async function bench(access: 'fake' | 'static' = 'fake') {
     ctx, slots: ctx.get('slots') as SlotRegistry, locale, create, rename, commands, accessSource, whenResourceAccess, stopGuard,
     retain, using, selectPanel, search, renameSession, binding, fork, pickDirectory, pinSession, unpinSession,
     workspacesSubscribe, initializeDefault, history, scope, sessionOf,
+    createProject, renameProject, deleteProject, assignWorkspaceProject,
     setWorkspaces: (snapshot: WorkspaceSnapshot): void => { workspaceSnapshot = snapshot },
     setSessions: (snapshot: SessionListState): void => { sessionSnapshot = snapshot },
   }
@@ -944,7 +966,10 @@ it('captures Workspace menu requests, rechecks mutable access, and withdraws reg
   expect(vi.spyOn(b.ctx.contextMenus, 'close')).toHaveBeenCalledOnce()
   const menu = b.ctx.contextMenus.resolve(target)
   await menu.ready
-  expect(menu.source.getSnapshot().map(item => item.id)).toEqual(['workspace.rename/rename', 'workspace.delete/delete'])
+  // No project exists yet, so the move-to-project submenu has nowhere to go.
+  expect(menu.source.getSnapshot().map(item => item.id)).toEqual([
+    'workspace.rename/rename', 'workspace.delete/delete',
+  ])
   menu.select('workspace.rename/rename')
   expect(browser.hooks.workspaceActionRequest.getSnapshot()).toEqual({ action: 'rename', workspaceId: 'alpha', displayTitle: 'Alpha', storedTitle: 'alpha' })
   browser.settleWorkspaceAction()
@@ -967,4 +992,78 @@ it('captures Workspace menu requests, rechecks mutable access, and withdraws reg
   await pending.ready
   await fiber.dispose()
   expect(pending.source.getSnapshot()).toEqual([])
+})
+
+it('opens, toggles, and settles the captured project menu', async () => {
+  const b = await bench()
+  b.setWorkspaces(workspaceState([workspace('alpha', [])], [], [], [project('p1', 'Alpha project', ['alpha'])]))
+  declare(b.slots, 'sidebar.workspaces')
+  await b.ctx.plugin({ inject: [...inject], apply }).await()
+  const browser = faceOf(b.slots.entries('sidebar.workspaces')[0]!) as WorkspaceBrowserInjected
+  const target = {
+    kind: 'project' as const,
+    value: { projectId: 'p1' as ProjectId, title: 'Alpha project', workspaceCount: 1 },
+  }
+  browser.openProjectMenu(target.value.projectId, 'Alpha project', 1, { x: 10, y: 20 })
+  expect(vi.spyOn(b.ctx.contextMenus, 'open')).toHaveBeenLastCalledWith(target, { x: 10, y: 20 })
+  const active = b.ctx.contextMenus.active as ReturnType<typeof createSnapshotStore<ContextMenuTarget | null>>
+  active.set(target)
+  browser.openProjectMenu(target.value.projectId, 'Alpha project', 1, { x: 10, y: 20 }, 'toggle')
+  expect(vi.spyOn(b.ctx.contextMenus, 'close')).toHaveBeenCalledOnce()
+
+  const menu = b.ctx.contextMenus.resolve(target)
+  await menu.ready
+  expect(menu.source.getSnapshot().map(item => item.id))
+    .toEqual(['project.rename/rename', 'project.delete/delete'])
+  menu.select('project.rename/rename')
+  expect(browser.hooks.projectActionRequest.getSnapshot()).toEqual({
+    action: 'rename', projectId: 'p1', title: 'Alpha project', workspaceCount: 1,
+  })
+  browser.settleProjectAction()
+  expect(browser.hooks.projectActionRequest.getSnapshot()).toBeNull()
+  const pending = b.ctx.contextMenus.resolve(target)
+  await pending.ready
+  await b.ctx.fiber.dispose()
+  expect(pending.source.getSnapshot()).toEqual([])
+})
+
+it('moves a Workspace between projects through the captured Workspace menu submenu', async () => {
+  const b = await bench()
+  b.setWorkspaces(workspaceState([workspace('alpha', [])], [], [], [
+    project('p1', 'Alpha project', ['alpha']), project('p2', 'Beta project'),
+  ]))
+  declare(b.slots, 'sidebar.workspaces')
+  const fiber = b.ctx.plugin({ inject: [...inject], apply })
+  await fiber.await()
+  const target = { kind: 'workspace' as const, value: { workspaceId: 'alpha' as WorkspaceId, path: '/projects/alpha', displayTitle: 'Alpha' } }
+  const menu = b.ctx.contextMenus.resolve(target)
+  await menu.ready
+  const move = menu.source.getSnapshot().find(item => item.id === 'workspace.moveToProject/move-to-project')
+  const options = move?.children ?? []
+  // The current project is checked; the unassigned option is not.
+  expect(options.map(option => option.label)).toEqual(['未归类', 'Alpha project', 'Beta project'])
+  expect(options.map(option => option.icon?.key)).toEqual([undefined, 'workspace.projectCurrent', undefined])
+  expect(options[2]?.id).toBeDefined()
+  menu.select(options[2]!.id)
+  await settled()
+  expect(b.assignWorkspaceProject).toHaveBeenCalledExactlyOnceWith('alpha', 'p2')
+  await fiber.dispose()
+})
+
+it('drives project create, rename, and delete from the browser share', async () => {
+  const b = await bench()
+  b.setWorkspaces(workspaceState([], [], [], [project('p1', 'Alpha project')]))
+  declare(b.slots, 'sidebar.workspaces')
+  await b.ctx.plugin({ inject: [...inject], apply }).await()
+  const browser = faceOf(b.slots.entries('sidebar.workspaces')[0]!) as WorkspaceBrowserInjected
+  browser.requestProjectCreate()
+  expect(browser.hooks.projectActionRequest.getSnapshot()).toEqual({ action: 'create' })
+  browser.settleProjectAction()
+  expect(browser.hooks.projectActionRequest.getSnapshot()).toBeNull()
+  await browser.createProject('Gamma project')
+  await browser.renameProject('p1' as ProjectId, 'Renamed')
+  await browser.deleteProject('p1' as ProjectId)
+  expect(b.createProject).toHaveBeenCalledExactlyOnceWith('Gamma project')
+  expect(b.renameProject).toHaveBeenCalledExactlyOnceWith('p1', 'Renamed')
+  expect(b.deleteProject).toHaveBeenCalledExactlyOnceWith('p1')
 })

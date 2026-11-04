@@ -8,7 +8,7 @@ import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within }
 import { allowAllAccess, bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionListState, SessionSummary } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {
-  WorkspaceId, WorkspaceSnapshot, WorkspaceView,
+  ProjectId, ProjectView, WorkspaceId, WorkspaceSnapshot, WorkspaceView,
 } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type {
   SessionPendingInteraction, SessionStatus, SessionStatusSnapshot,
@@ -16,9 +16,11 @@ import type {
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-import type { DirectoryFlowOwnerProps, WorkspaceActionRequest, WorkspaceBrowserProps } from '../src/client/contract/slots.ts'
+import type {
+  DirectoryFlowOwnerProps, ProjectActionRequest, WorkspaceActionRequest, WorkspaceBrowserProps,
+} from '../src/client/contract/slots.ts'
 import { createWorkspaceShortcutControls } from '../src/client/shortcuts.ts'
-import { createWorkspaceViewStore, FLAT_SESSION_ORDER_KEY } from '../src/client/stores.ts'
+import { createWorkspaceViewStore, FLAT_SESSION_ORDER_KEY, type SessionGroupBy } from '../src/client/stores.ts'
 import { UNGROUPED_KEY } from '../src/client/tree.ts'
 import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
 import { zh } from '../src/client/locales.ts'
@@ -70,14 +72,20 @@ const workspace = (id: string, sessionIds: string[], title = id): WorkspaceView 
   workspaceId: wid(id), path: `/projects/${id}`, title,
   sessionIds: sessionIds.map(sid), createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
 })
+const project = (id: string, title: string, workspaceIds: readonly string[] = []): ProjectView => ({
+  projectId: id as ProjectId, title, workspaceIds: workspaceIds.map(wid),
+  createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+})
 const workspaceState = (
   items: readonly WorkspaceView[],
   archivedSessionIds: readonly SessionId[] = [],
   pinnedSessionIds: readonly SessionId[] = [],
+  projects: WorkspaceSnapshot['projects'] = [],
 ): WorkspaceSnapshot => ({
   items,
   archivedSessionIds,
   pinnedSessionIds,
+  projects,
   state: 'idle',
   phase: 'ready',
   error: null,
@@ -107,14 +115,42 @@ const renderDirectoryFlowOnly: WorkspaceBrowserProps['renderSlot'] = (name: stri
     ? <div data-testid="directory-flow" />
     : null
 
-function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+/**
+ * Mount the browser. `groupBy` seeds the viewing store's grouping mode; the
+ * other tests exercise the sibling-Workspace modes, so the default here is
+ * `workspace` even though the shipped store defaults to the project view.
+ * `'default'` leaves a fresh (or rehydrated) store's own value untouched.
+ * @param overrides - composed prop overrides.
+ * @param options - viewing-store seeding; `groupBy` selects the grouping mode.
+ * @returns the rendered view, its props, store, shortcut controls, and the dialog openers.
+ */
+function mount(overrides: Partial<WorkspaceBrowserProps> = {}, options: { groupBy?: SessionGroupBy | 'default' } = {}) {
   const controls = createWorkspaceShortcutControls()
   const request = createSnapshotStore<WorkspaceActionRequest | null>(null)
+  const projectRequest = createSnapshotStore<ProjectActionRequest | null>(null)
   const store = createWorkspaceViewStore().create()
+  // A test that persisted a grouping mode keeps it; anything else exercises the
+  // sibling-Workspace mode, so the project view's copy and layout stay in the
+  // project-mode cases of their own.
+  const persistedView = localStorage.getItem('dsh.workspace.view.v6')
+  const persistedGroupBy = persistedView === null
+    ? undefined
+    : (JSON.parse(persistedView) as { groupBy?: SessionGroupBy }).groupBy
+  if (options.groupBy !== 'default') {
+    store.actions.setGroupBy(options.groupBy
+      ?? (persistedGroupBy === undefined || persistedGroupBy === 'project' ? 'workspace' : persistedGroupBy))
+  }
   const props: WorkspaceBrowserProps = {
     openWorkspaceMenu: vi.fn(),
     useWorkspaceActionRequest: bindSnapshotSelector(request),
     settleWorkspaceAction: () => { request.set(null) },
+    openProjectMenu: vi.fn(),
+    useProjectActionRequest: bindSnapshotSelector(projectRequest),
+    requestProjectCreate: vi.fn(),
+    settleProjectAction: () => { projectRequest.set(null) },
+    createProject: vi.fn(async () => {}),
+    renameProject: vi.fn(async () => {}),
+    deleteProject: vi.fn(async () => {}),
     openSessionMenu: vi.fn(),
     useContextMenuTarget: selector => selector(null),
     useShortcuts: select => select([]),
@@ -156,6 +192,10 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
   return { view, props, store, controls, openDialog: (workspaceId: WorkspaceId, displayTitle: string, action: 'rename' | 'delete') => {
     const storedTitle = props.useWorkspaces(state => state.items.find(row => row.workspaceId === workspaceId)?.title ?? displayTitle)
     act(() => { request.set({ action, workspaceId, displayTitle, storedTitle }) })
+  }, openProjectDialog: (projectId: ProjectId, title: string, workspaceCount: number, action: 'rename' | 'delete') => {
+    act(() => { projectRequest.set({ action, projectId, title, workspaceCount }) })
+  }, createProjectDialog: () => {
+    act(() => { projectRequest.set({ action: 'create' }) })
   } }
 }
 
@@ -176,7 +216,7 @@ describe('WorkspaceBrowser', () => {
     preferences.actions.setSessionOrder(FLAT_SESSION_ORDER_KEY, ['older', 'newer'], {})
     preferences.actions.setGroupExpanded(account, true)
     preferences.actions.setGroupExpanded(UNGROUPED_KEY, true)
-    localStorage.setItem('dsh.workspace.view.v5', JSON.stringify({ ...preferences.getSnapshot(), orderBy: 'updated' }))
+    localStorage.setItem('dsh.workspace.view.v6', JSON.stringify({ ...preferences.getSnapshot(), orderBy: 'updated' }))
     const b = mount({
       useSessions: hook(sessionState([summary('newer', 100)])),
       useWorkspaces: hook(workspaceState(mode === 'ungrouped' ? [] : [workspace(account, ['older', 'newer'])])),
@@ -318,7 +358,7 @@ describe('WorkspaceBrowser', () => {
       const preferences = createWorkspaceViewStore().create()
       preferences.actions.setGroupBy(mode === 'flat' ? 'flat' : 'workspace')
       preferences.actions.setGroupExpanded(mode === 'ungrouped' ? UNGROUPED_KEY : 'alpha', true)
-      localStorage.setItem('dsh.workspace.view.v5', JSON.stringify(preferences.getSnapshot()))
+      localStorage.setItem('dsh.workspace.view.v6', JSON.stringify(preferences.getSnapshot()))
       mount({
         useSessions: hook(sessionState([summary('located', 1, { cwd: '/home/u/Documents/project' })])),
         useWorkspaces: hook(workspaceState(mode === 'ungrouped' ? [] : [workspace('alpha', ['located'])])),
@@ -430,26 +470,28 @@ describe('WorkspaceBrowser', () => {
 
   it('drops the obsolete timestamp ledger from persisted viewing state', async () => {
     localStorage.clear()
-    localStorage.setItem('dsh.workspace.view.v5', JSON.stringify({
+    localStorage.setItem('dsh.workspace.view.v6', JSON.stringify({
       groupBy: 'workspace',
       orderBy: 'manual',
       groupExpansion: {},
+      projectExpansion: {},
       sessionOrderByAccount: {},
       sessionUpdatedAtByAccount: { alpha: { old: 10 } },
     }))
     mount()
     await waitFor(() => {
-      const persisted = JSON.parse(localStorage.getItem('dsh.workspace.view.v5') ?? '{}') as Record<string, unknown>
+      const persisted = JSON.parse(localStorage.getItem('dsh.workspace.view.v6') ?? '{}') as Record<string, unknown>
       expect(persisted).not.toHaveProperty('sessionUpdatedAtByAccount')
     })
   })
 
-  it('hides archived Sessions when a persisted v5 view has no archived filter', () => {
-    const key = 'dsh.workspace.view.v5'
+  it('hides archived Sessions when a persisted view has no archived filter', () => {
+    const key = 'dsh.workspace.view.v6'
     const previous = localStorage.getItem(key)
     try {
       localStorage.setItem(key, JSON.stringify({
-        groupBy: 'workspace', orderBy: 'manual', groupExpansion: { alpha: true }, sessionOrderByAccount: {},
+        groupBy: 'workspace', orderBy: 'manual', groupExpansion: { alpha: true }, projectExpansion: {},
+        sessionOrderByAccount: {},
       }))
       const b = mount({
         useSessions: hook(sessionState([summary('alive', 2), summary('gone', 1)])),
@@ -469,7 +511,7 @@ describe('WorkspaceBrowser', () => {
     }
   })
 
-  it('renders the grouped tree by default and switches to the flat list via Group by', () => {
+  it('renders the sibling-Workspace grouping and switches to the flat list via Group by', () => {
     const sessions = sessionState([summary('alpha-s', 2), summary('beta-s', 1)])
     const b = mount({
       useSessions: hook(sessions),
@@ -484,7 +526,7 @@ describe('WorkspaceBrowser', () => {
     expect(screen.getByText('分组方式')).toBeTruthy() // the menu heading label
     expect(screen.getAllByRole('separator')).toHaveLength(2)
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
-      '按工作区', '按工作区树', '单列表', '手动排序', '最近更新', '隐藏已归档', '全部对话（显示已归档）', '仅显示已归档',
+      '按项目', '按工作区', '按工作区树', '单列表', '手动排序', '最近更新', '隐藏已归档', '全部对话（显示已归档）', '仅显示已归档',
     ])
     expect(screen.getByRole('menuitem', { name: '按工作区' }).querySelector('svg')).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: '手动排序' }).querySelector('svg')).toBeTruthy()
@@ -2796,5 +2838,175 @@ describe('Workspace tree grouping', () => {
     fireEvent.dragEnd(alpha)
     expect(b.props.insertWorkspaceBefore).toHaveBeenCalledOnce()
     expect(b.props.insertWorkspaceBefore).toHaveBeenCalledWith(wid('alpha'), wid('gamma'))
+  })
+})
+
+describe('project grouping', () => {
+  const twoProjects = () => workspaceState(
+    [workspace('alpha', ['alpha-s']), workspace('loose', [])],
+    [], [],
+    [project('p1', 'Alpha project', ['alpha'])],
+  )
+
+  const projectSection = (title: string): HTMLElement => {
+    const header = screen.getByText(title).closest('[role="treeitem"]') as HTMLElement
+    return header.parentElement as HTMLElement
+  }
+
+  it('opens in the shipped project grouping by default', () => {
+    localStorage.clear()
+    mount({
+      useSessions: hook(sessionState([summary('alpha-s', 2)])),
+      useWorkspaces: hook(twoProjects()),
+    }, { groupBy: 'default' })
+    expect(screen.getByText('项目')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '新建项目' })).toBeTruthy()
+    expect(screen.queryByText('工作区')).toBeNull()
+  })
+
+  it('renders plain Workspace sections until the first project exists', () => {
+    const workspaceRow = (title: string): HTMLElement =>
+      screen.getByText(title).closest('[role="treeitem"]') as HTMLElement
+    const b = mount({
+      useSessions: hook(sessionState([summary('alpha-s', 2)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s']), workspace('loose', [])])),
+    }, { groupBy: 'project' })
+    // The grouping level exists only once a project does: no unassigned header,
+    // and the previous sibling-Workspace layout renders unchanged.
+    expect(screen.queryByText('未归类')).toBeNull()
+    expect(workspaceRow('alpha').getAttribute('draggable')).toBe('true')
+    expect(screen.queryByText('alpha-s')).toBeNull()
+    fireEvent.click(workspaceRow('alpha'))
+    expect(b.store.getSnapshot().groupExpansion).toEqual({ alpha: true })
+    expect(screen.getByText('alpha-s')).toBeTruthy()
+
+    // The first project introduces the section level; the leftovers move under
+    // the unassigned bucket and the Workspace expansion already saved stands.
+    rerender(b, {
+      useWorkspaces: hook(workspaceState(
+        [workspace('alpha', ['alpha-s']), workspace('loose', [])], [], [],
+        [project('p1', 'Alpha project', ['alpha'])],
+      )),
+    })
+    expect(screen.getByText('Alpha project')).toBeTruthy()
+    expect(within(projectSection('Alpha project')).getByText('alpha')).toBeTruthy()
+    expect(screen.getByText('alpha-s')).toBeTruthy()
+    const unassigned = screen.getByText('未归类').closest('[role="treeitem"]') as HTMLElement
+    expect(within(unassigned.parentElement as HTMLElement).getByText('loose')).toBeTruthy()
+  })
+
+  it('renders project sections with their Workspaces and one unassigned bucket', () => {
+    const b = mount({
+      useSessions: hook(sessionState([summary('alpha-s', 2)])),
+      useWorkspaces: hook(twoProjects()),
+    }, { groupBy: 'project' })
+    const alphaSection = projectSection('Alpha project')
+    const projectHeaderRow = screen.getByText('Alpha project').closest('[role="treeitem"]') as HTMLElement
+    expect(projectHeaderRow.getAttribute('aria-expanded')).toBe('true')
+    expect(within(projectHeaderRow).getByText('1')).toBeTruthy()
+    expect(within(alphaSection).getByText('1 个工作区')).toBeTruthy()
+    // The Workspace row sits one level below its project header.
+    const workspaceRow = within(alphaSection).getByText('alpha').closest('[role="treeitem"]') as HTMLElement
+    expect(workspaceRow.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('alpha-s')).toBeNull()
+    fireEvent.click(workspaceRow)
+    expect(screen.getByText('alpha-s')).toBeTruthy()
+    // Workspaces outside every project trail in the unassigned bucket.
+    const unassignedRow = screen.getByText('未归类').closest('[role="treeitem"]') as HTMLElement
+    expect(projectHeaderRow.compareDocumentPosition(unassignedRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(unassignedRow.parentElement as HTMLElement).getByText('loose')).toBeTruthy()
+    expect(b.store.getSnapshot().groupBy).toBe('project')
+  })
+
+  it('collapses a project and remembers it across remounts', () => {
+    const browser = mount({
+      useSessions: hook(sessionState([summary('alpha-s', 2)])),
+      useWorkspaces: hook(twoProjects()),
+    }, { groupBy: 'project' })
+    fireEvent.click(screen.getByText('Alpha project'))
+    expect(browser.store.getSnapshot().projectExpansion).toEqual({ p1: false })
+    expect(screen.queryByText('alpha')).toBeNull()
+    browser.view.unmount()
+    const restored = mount({
+      useSessions: hook(sessionState([summary('alpha-s', 2)])),
+      useWorkspaces: hook(twoProjects()),
+    }, { groupBy: 'project' })
+    expect(restored.store.getSnapshot().projectExpansion).toEqual({ p1: false })
+    expect(screen.queryByText('alpha')).toBeNull()
+    // Clicking the folded header expands it again.
+    fireEvent.click(screen.getByText('Alpha project'))
+    expect(screen.getByText('alpha')).toBeTruthy()
+  })
+
+  it('moves a Workspace row between project sections when membership changes', () => {
+    const b = mount({
+      useSessions: hook(sessionState([summary('alpha-s', 2)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])], [], [], [
+        project('p1', 'Alpha project', ['alpha']), project('p2', 'Beta project'),
+      ])),
+    }, { groupBy: 'project' })
+    expect(within(projectSection('Alpha project')).getByText('alpha')).toBeTruthy()
+    rerender(b, {
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])], [], [], [
+        project('p1', 'Alpha project'), project('p2', 'Beta project', ['alpha']),
+      ])),
+    })
+    expect(within(projectSection('Beta project')).getByText('alpha')).toBeTruthy()
+    expect(within(projectSection('Alpha project')).queryByText('alpha')).toBeNull()
+  })
+
+  it('creates a project from the header dialog', () => {
+    const createProject = vi.fn(async () => {})
+    const b = mount({ useWorkspaces: hook(twoProjects()), createProject }, { groupBy: 'project' })
+    fireEvent.click(screen.getByRole('button', { name: '新建项目' }))
+    expect(b.props.requestProjectCreate).toHaveBeenCalledOnce()
+    b.createProjectDialog()
+    const input = screen.getByLabelText<HTMLInputElement>('项目名称')
+    expect(input.value).toBe('')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '新建' }).disabled).toBe(true)
+    fireEvent.change(input, { target: { value: '  Alpha project  ' } })
+    expect(screen.getByRole('alert').textContent).toBe('已存在名为“Alpha project”的项目。')
+    fireEvent.change(input, { target: { value: ' Gamma project ' } })
+    fireEvent.click(screen.getByRole('button', { name: '新建' }))
+    expect(createProject).toHaveBeenCalledWith('Gamma project')
+  })
+
+  it('renames a project from the captured dialog', () => {
+    const renameProject = vi.fn(async () => {})
+    const b = mount({ useWorkspaces: hook(twoProjects()), renameProject }, { groupBy: 'project' })
+    b.openProjectDialog('p1' as ProjectId, 'Alpha project', 1, 'rename')
+    const input = screen.getByLabelText<HTMLInputElement>('项目名称')
+    expect(input.value).toBe('Alpha project')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '重命名' }).disabled).toBe(true)
+    fireEvent.change(input, { target: { value: 'Renamed project' } })
+    fireEvent.click(screen.getByRole('button', { name: '重命名' }))
+    expect(renameProject).toHaveBeenCalledWith('p1', 'Renamed project')
+  })
+
+  it('deletes only the project grouping and states the retention boundary', async () => {
+    const deleteProject = vi.fn(async () => {})
+    const b = mount({ useWorkspaces: hook(twoProjects()), deleteProject }, { groupBy: 'project' })
+    b.openProjectDialog('p1' as ProjectId, 'Alpha project', 1, 'delete')
+    expect(screen.getByText(/删除项目“Alpha project”/)).toBeTruthy()
+    expect(screen.getByText(/不会/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '删除项目' }))
+    expect(deleteProject).toHaveBeenCalledWith('p1')
+    // The confirmation stays until the list projection drops the project.
+    await waitFor(() => { expect(screen.getByRole('status').textContent).toBe('正在删除项目…') })
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    rerender(b, { useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s']), workspace('loose', [])])) })
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+  })
+
+  it('surfaces a Host project failure inside its dialog', async () => {
+    const renameProject = vi.fn(async () => { throw new Error('workspace renameProject failed: project/name-conflict: taken') })
+    const b = mount({ useWorkspaces: hook(twoProjects()), renameProject }, { groupBy: 'project' })
+    b.openProjectDialog('p1' as ProjectId, 'Alpha project', 1, 'rename')
+    fireEvent.change(screen.getByLabelText('项目名称'), { target: { value: 'Gamma project' } })
+    fireEvent.click(screen.getByRole('button', { name: '重命名' }))
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toContain('project/name-conflict')
+    })
+    expect(screen.getByRole('dialog')).toBeTruthy()
   })
 })

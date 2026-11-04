@@ -5,10 +5,11 @@
   - button "Plugins"
   - button "Automation tasks"
   - button "More"
-- text: Workspaces
+- text: Projects
 - button "Search sessions"
 - textbox "Search session names"
 - button "View options"
+- button "Add project"
 - button "Add workspace"
 - tree "Sessions":
   - treeitem "workspace" [expanded]

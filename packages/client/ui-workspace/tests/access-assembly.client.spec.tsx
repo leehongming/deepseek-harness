@@ -33,6 +33,10 @@ function SidebarFrame({ renderSlot }: FrameProps) {
 
 const WORKSPACE = 'w1' as WorkspaceId
 
+/** The Workspace header row; the project-grouped tree also renders a project header above it. */
+const workspaceHeader = (): HTMLElement =>
+  screen.getAllByRole('treeitem').find(row => row.getAttribute('data-row-key')?.startsWith('workspace:')) as HTMLElement
+
 /**
  * The assembled browsing region over one Workspace, answering access from one snapshot owner.
  * @param access - Snapshot owner the page's access Hooks read.
@@ -76,6 +80,12 @@ async function bench(access: ClientAccessState, options: { ungroupedSession?: Se
     SidebarFrame as never,
   )
   await runtime.mount({ inject: [...injectMenus], apply: applyMenus })
+  // This spec covers Workspace header actions, so it pins the sibling-Workspace
+  // grouping instead of inheriting the shipped project grouping.
+  localStorage.setItem('dsh.workspace.view.v6', JSON.stringify({
+    groupBy: 'workspace', orderBy: 'updated', groupExpansion: {}, projectExpansion: {},
+    sessionOrderByAccount: {}, archivedFilter: 'default',
+  }))
   await runtime.mount({ inject: [...inject], apply })
   return runtime
 }
@@ -112,7 +122,7 @@ describe('Workspace header actions under the page access snapshot', () => {
       })
       expect(screen.getByRole('button', { name: '在“Project”中新建会话' })).toBeTruthy()
       expect(screen.getByRole('button', { name: '工作区“Project”的操作' })).toBeTruthy()
-      expect(screen.getByRole('treeitem').getAttribute('draggable')).toBe('true')
+      expect(workspaceHeader().getAttribute('draggable')).toBe('true')
 
       const grantedMenu = runtime.ctx.contextMenus.resolve(target)
       await grantedMenu.ready

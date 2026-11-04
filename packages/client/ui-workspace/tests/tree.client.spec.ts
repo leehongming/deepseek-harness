@@ -834,7 +834,8 @@ describe('deriveSearchResults', () => {
 describe('createWorkspaceViewStore', () => {
   it('stores view preferences and selects Manual when saving a drag order', () => {
     const store = createWorkspaceViewStore().create()
-    expect(store.getSnapshot().groupBy).toBe('workspace')
+    expect(store.getSnapshot().groupBy).toBe('project')
+    expect(store.getSnapshot().projectExpansion).toEqual({})
     expect(store.getSnapshot().orderBy).toBe('updated')
     store.actions.setGroupBy('flat')
     store.actions.setOrderBy('updated', {})
@@ -911,18 +912,22 @@ describe('createWorkspaceViewStore', () => {
     expect(store.getSnapshot().sessionOrderByAccount.alpha).toEqual(['c', 'b', 'a'])
   })
 
-  it('removes view state outside the retained Workspace key set', () => {
+  it('removes view state outside the retained Workspace and project key sets', () => {
     const store = createWorkspaceViewStore().create()
     store.actions.setGroupExpanded('', true)
     store.actions.setGroupExpanded('alpha', true)
     store.actions.setGroupExpanded('deleted', true)
+    store.actions.setProjectExpanded('', false)
+    store.actions.setProjectExpanded('project-a', false)
+    store.actions.setProjectExpanded('deleted-project', false)
     store.actions.setSessionOrder('alpha', ['alpha-session'], {})
     store.actions.setSessionOrder('deleted', ['deleted-session'], {})
 
-    store.actions.retainAccountKeys(['', 'alpha'])
+    store.actions.retainAccountKeys(['', 'alpha'], ['', 'project-a'])
 
     const snapshot = store.getSnapshot()
     expect(snapshot.groupExpansion).toEqual({ '': true, alpha: true })
+    expect(snapshot.projectExpansion).toEqual({ '': false, 'project-a': false })
     expect(snapshot.sessionOrderByAccount).toEqual({ alpha: ['alpha-session'] })
   })
 })

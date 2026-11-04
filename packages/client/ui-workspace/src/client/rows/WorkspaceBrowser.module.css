@@ -479,6 +479,21 @@
   margin-top: 4px;
 }
 
+/* One project section: header row + the Workspace sections it owns, the
+   project header reading as the higher level through the wider gap between
+   sections and the one-step indent below it. */
+.projectSection {
+  position: relative;
+}
+
+.projectSection > * + * {
+  margin-top: 2px;
+}
+
+.projectSection + .projectSection {
+  margin-top: 8px;
+}
+
 .listTopDropIndicator,
 .workspaceDropBefore::before,
 .workspaceDropAfter::after {

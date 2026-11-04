@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-03-project-grouping-above-workspaces.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-03-project-grouping-above-workspaces.md
+/agent-note-project-grouping-above-workspaces-lives-in-its-own-storage-domain:
+  en: 01cad10704e1be54
+  zh: fe382b4ae9b6055d
+/agent-note-project-grouping-above-workspaces-lives-in-its-own-storage-domain/problem:
+  en: cfc22153519bb599
+  zh: 3184009f3bded2e7
+/agent-note-project-grouping-above-workspaces-lives-in-its-own-storage-domain/decision:
+  en: 72e3c0a1007b3f7c
+  zh: a2fb7c594fa7d9de
+/agent-note-project-grouping-above-workspaces-lives-in-its-own-storage-domain/alternatives-considered:
+  en: 1242cc2a5c59e04f
+  zh: 955606675d8a10f9
+/agent-note-project-grouping-above-workspaces-lives-in-its-own-storage-domain/consequences:
+  en: 8d9daba975de4b51
+  zh: 1beb179b62b2e7d5

@@ -10,6 +10,15 @@ import { DirectoryPickerController } from './directory-picker.ts'
 import { WorkspaceFeed, workspaceView } from './feed.ts'
 import { defaultWorkspaceDirectory, validateDocumentsDirectory } from './default-directory.ts'
 import type {
+  ProjectAssignWorkspaceRequest,
+  ProjectCreateRequest,
+  ProjectCreateValue,
+  ProjectDeleteRequest,
+  ProjectDeleteValue,
+  ProjectListValue,
+  ProjectRenameRequest,
+  ProjectValue,
+  ProjectView,
   WorkspaceArchiveSessionRequest,
   WorkspaceArchiveValue,
   WorkspaceBaseline,
@@ -192,9 +201,51 @@ export class WorkspaceController extends TypertRemoteService {
   }
 
   /**
+   * Create one Project with a unique non-blank title.
+   * @param request - proposed Project title.
+   * @returns the created Project projection.
+   */
+  @Remote('createProject')
+  createProject(request: ProjectCreateRequest): Promise<ProjectCreateValue> {
+    return this.commands.createProject(request)
+  }
+
+  /**
+   * Rename one Project to a unique non-blank title.
+   * @param request - Project identity and proposed title.
+   * @returns the updated Project projection.
+   */
+  @Remote('renameProject')
+  renameProject(request: ProjectRenameRequest): Promise<ProjectValue> {
+    return this.commands.renameProject(request)
+  }
+
+  /**
+   * Delete one Project. Its member Workspaces become ungrouped and are kept.
+   * @param request - Project identity to delete.
+   * @returns deletion confirmation.
+   */
+  @Remote('deleteProject')
+  deleteProject(request: ProjectDeleteRequest): Promise<ProjectDeleteValue> {
+    return this.commands.deleteProject(request)
+  }
+
+  /**
+   * Move one Workspace into a Project, or out of every Project when the
+   * request omits `projectId`.
+   * @param request - Workspace identity and its target Project, if any.
+   * @returns the complete resulting Project list, newest created first.
+   */
+  @Remote('assignWorkspaceProject')
+  assignWorkspaceProject(request: ProjectAssignWorkspaceRequest): Promise<ProjectListValue> {
+    return this.commands.assignWorkspaceProject(request)
+  }
+
+  /**
    * Stream a complete Workspace baseline followed by ordered increments. A
-   * non-owner receives only the Workspaces and Sessions `allows()` admits.
-   * When a delivered Workspace is no longer admitted at its next change or
+   * non-owner receives only the Workspaces and Sessions `allows()` admits, and
+   * a Project arrives carrying only the member Workspaces that same access
+   * admits. When a delivered Workspace is no longer admitted at its next change or
    * the next order change, the stream sends a `replace` frame with the
    * complete filtered state instead of a `remove`, because a Client never
    * resurrects a removed Workspace; a `remove` frame reports a deletion and
@@ -208,6 +259,8 @@ export class WorkspaceController extends TypertRemoteService {
     const visible = (workspaceId: WorkspaceId): boolean => access.allows({ kind: 'workspace', id: workspaceId })
     const sessions = (sessionIds: readonly SessionId[]): SessionId[] =>
       sessionIds.filter(sessionId => access.allows({ kind: 'session', id: sessionId }))
+    const projects = (value: readonly ProjectView[]): ProjectView[] =>
+      value.map(project => ({ ...project, workspaceIds: project.workspaceIds.filter(visible) }))
     /** Workspaces this generation has delivered and not yet removed. */
     const delivered = new Set<WorkspaceId>()
     /** The admitted part of `value`; it becomes the delivered set. */
@@ -219,6 +272,7 @@ export class WorkspaceController extends TypertRemoteService {
         items: items.map(item => ({ ...item, sessionIds: sessions(item.sessionIds) })),
         archivedSessionIds: sessions(value.archivedSessionIds),
         pinnedSessionIds: sessions(value.pinnedSessionIds),
+        projects: projects(value.projects),
       }
     }
     for await (const frame of this.feed.follow(signal)) {
@@ -251,6 +305,9 @@ export class WorkspaceController extends TypertRemoteService {
           break
         case 'pinned':
           yield { type: 'pinned', pinnedSessionIds: sessions(frame.pinnedSessionIds) }
+          break
+        case 'projects':
+          yield { type: 'projects', projects: projects(frame.projects) }
           break
         /* v8 ignore next -- closed follow-frame union. */
         default:

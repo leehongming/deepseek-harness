@@ -1,8 +1,8 @@
 /**
  * The workspace/session browsing region filling the sidebar shell's
  * `sidebar.workspaces` hole: section header (title + view options + add
- * workspace), search, the grouped tree or flat list, and the workspace
- * dialogs. Wide state renders the full browser; rail state renders the two
+ * workspace / add project), search, the project-grouped tree, the grouped
+ * Workspace tree or flat list, and the workspace and project dialogs. Wide state renders the full browser; rail state renders the two
  * region icons (search / add workspace) as 36px controls on the shell's shared
  * rail entry path, each requesting expansion through the owner share. Adding
  * is the header button's one action, so it raises the directory flow with no
@@ -16,28 +16,30 @@
  */
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { WorkspaceDialogs } from './WorkspaceDialogs.tsx'
+import { ProjectDialogs, WorkspaceDialogs } from './WorkspaceDialogs.tsx'
 import {
-  AnimatedRows, HoverCardGroup, IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular, IconArchiveOutlineRegular,
-  IconChevronsUpDownOutlineRegular, IconClockOutlineRegular, IconCloseFillRegular,
-  IconFlatListOutlineRegular, IconFolderCloseRegular, IconProjectAddOutlineRegular,
+  AnimatedRows, HoverCardGroup, IconAppsAddOutlineRegular, IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular,
+  IconArchiveOutlineRegular, IconChevronsUpDownOutlineRegular, IconClockOutlineRegular, IconCloseFillRegular,
+  IconFlatListOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconProjectAddOutlineRegular,
   IconQueueOutlineRegular, IconSearchOutlineRegular, IconSlidersTwoOutlineRegular,
   IconWorkspaceTreeOutlineRegular, Menu, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   SessionListState, SessionSearchResultItem,
 } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { ProjectView, WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { workspaceDisplayTitle } from '@deepseek-ai/dsh-api-workspace-controller/default-workspace'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { WorkspaceBrowserProps } from '../contract/slots.ts'
-import type { ArchivedFilter, GroupNode, SessionNode, SessionOrderBy, SessionRowState } from '../tree.ts'
-import {
-  deriveFlat, deriveGroups, deriveSearchResults, orderByRecency, owningGroupKey, owningParentFolder,
-  pinCurrentBlank, reconcileManualOrder, sessionMemberIds, UNGROUPED_KEY,
+import type {
+  ArchivedFilter, GroupNode, ProjectNode, SessionNode, SessionOrderBy, SessionRowState,
 } from '../tree.ts'
-import { ProjectRowItem, SearchResultItem, SessionNodeItem } from './Rows.tsx'
+import {
+  deriveFlat, deriveGroups, deriveProjectTree, deriveSearchResults, orderByRecency, owningGroupKey,
+  owningParentFolder, owningProjectKey, pinCurrentBlank, reconcileManualOrder, sessionMemberIds, UNGROUPED_KEY,
+} from '../tree.ts'
+import { ProjectNodeItem, SearchResultItem, WorkspaceHeaderRowItem, SessionNodeItem } from './Rows.tsx'
 import { FLAT_SESSION_ORDER_KEY, type SessionGroupBy } from '../stores.ts'
 import { WorkspacePickFlow } from '../WorkspacePicker.tsx'
 import css from './WorkspaceBrowser.module.css'
@@ -155,6 +157,7 @@ function ViewOptionsMenu({ groupBy, orderBy, archivedFilter, onGroupPick, onOrde
       onClose={() => { setOpen(false) }}
       items={[
         { type: 'label' as const, id: 'group-by', text: t('groupBy.label') },
+        { id: 'project', label: t('groupBy.project'), icon: <IconFolderOpenOutlineRegular /> },
         { id: 'workspace', label: t('groupBy.workspace'), icon: <IconFolderCloseRegular /> },
         { id: 'workspace-tree', label: t('groupBy.workspaceTree'), icon: <IconWorkspaceTreeOutlineRegular /> },
         { id: 'flat', label: t('groupBy.flat'), icon: <IconFlatListOutlineRegular /> },
@@ -174,7 +177,7 @@ function ViewOptionsMenu({ groupBy, orderBy, archivedFilter, onGroupPick, onOrde
         { default: 'hide-archived', show: 'show-archived', only: 'only-archived' }[archivedFilter],
       ]}
       onSelect={(id) => {
-        if (id === 'workspace' || id === 'workspace-tree' || id === 'flat') onGroupPick(id)
+        if (id === 'project' || id === 'workspace' || id === 'workspace-tree' || id === 'flat') onGroupPick(id)
         else if (id === 'manual' || id === 'updated') onOrderPick(id)
         else if (id === 'hide-archived') onArchivedFilterPick('default')
         else if (id === 'show-archived') onArchivedFilterPick('show')
@@ -268,6 +271,19 @@ type SessionTreeProps = Pick<
   home?: string | undefined
   /** Workspaces in Host group order with browser-projected Session order. */
   workspaces: readonly WorkspaceView[]
+  /**
+   * Projects in display order with their Workspace membership; present only
+   * when the project view has at least one project. With none, the project
+   * view renders the plain Workspace sections, so a first-run sidebar has no
+   * empty grouping level above it.
+   */
+  projects?: readonly ProjectView[] | undefined
+  /** Explicit project expansion; an absent key means expanded. */
+  projectExpansion: Readonly<Record<string, boolean>>
+  /** Persist one project section's expansion. */
+  setProjectExpanded: (key: string, expanded: boolean) => void
+  /** Open a project header's captured actions without changing expansion or selection. */
+  openProjectMenu: WorkspaceBrowserProps['openProjectMenu']
   /** Browser-projected order for Sessions outside every Workspace. */
   ungroupedSessionIds: readonly SessionId[]
   /** Whether the current Workspace stream has a complete Host baseline. */
@@ -319,6 +335,7 @@ function SessionTree({
   renderSlot, openSessionMenu, openWorkspaceMenu, useContextMenuTarget, useContextMenu,
   insertWorkspaceBefore,
   nestWorkspaces, groupExpansion, setGroupExpanded,
+  projects, projectExpansion, setProjectExpanded, openProjectMenu,
   setSessionOrder, home, t,
   revealSessionId, onSessionRevealed, shortcuts,
 }: SessionTreeProps) {
@@ -383,6 +400,40 @@ function SessionTree({
       }
     }
   }, [groupExpansion, parents, revealGroup, setGroupExpanded])
+  // Project sections bucket the same Workspace groups one level higher; the
+  // other grouped modes leave `projects` undefined and render groups directly.
+  const projectNodes = useMemo(
+    () => projects === undefined
+      ? undefined
+      : deriveProjectTree(list, workspaces, projects, rowState, statuses, {
+        expandedGroups,
+        ungroupedOrder: ungroupedSessionIds,
+        projectExpansion,
+      }),
+    [expandedGroups, list, projectExpansion, projects, rowState, statuses, ungroupedSessionIds, workspaces],
+  )
+  // Every rendered Workspace group belongs to a project section or to the
+  // unassigned bucket; a folded section must not raise its members' watermarks.
+  const projectOfGroup = useMemo(() => {
+    if (projects === undefined) return new Map<string, string>()
+    const owners = new Map<string, string>()
+    for (const project of projects) {
+      for (const workspaceId of project.workspaceIds) owners.set(workspaceId, project.projectId)
+    }
+    return owners
+  }, [projects])
+  const foldedProjects = new Set((projectNodes ?? []).filter(node => !node.expanded).map(node => node.key))
+  const projectOf = (key: string): string | undefined =>
+    projects === undefined ? undefined : (projectOfGroup.get(key) ?? UNGROUPED_KEY)
+  // Reveal a searched Session's project section before the Workspace group and
+  // Session list, so the row it scrolls to is actually mounted.
+  const revealProject = projects === undefined || revealGroup === undefined
+    ? undefined
+    : owningProjectKey(projects, revealGroup as WorkspaceId) ?? UNGROUPED_KEY
+  useEffect(() => {
+    if (revealProject === undefined) return
+    if (projectExpansion[revealProject] === false) setProjectExpanded(revealProject, true)
+  }, [projectExpansion, revealProject, setProjectExpanded])
   const baselines = new Map(groups.map(group => [group.key, Math.max(SESSION_WATERMARK_BASE, requiredWatermark(
     group.sessions,
     current,
@@ -393,7 +444,8 @@ function SessionTree({
     for (let owner = parents.get(key); owner !== undefined; owner = parents.get(owner)) {
       if (foldedKeys.has(owner)) return true
     }
-    return false
+    const project = projectOf(key)
+    return project !== undefined && foldedProjects.has(project)
   }
   // A group hidden by a folded ancestor keeps its own expansion and rows but must not raise its watermark.
   const requiredWatermarks = new Map([...baselines].filter(([key]) => !underFoldedAncestor(key)))
@@ -468,7 +520,11 @@ function SessionTree({
     && workspaceDrag?.over?.id === rootGroups[0].workspaceId
     && workspaceDrag.over.half === 'before'
 
-  const rowKeys: string[] = groups.length === 0 ? ['empty'] : []
+  // Project sections own the top level in the project view; Workspace rows
+  // inside them keep their own Sessions but cannot reorder, because the
+  // registry order spans Workspaces shown under other project headers.
+  const reorderable = projects === undefined
+  const rowKeys: string[] = (projectNodes ?? groups).length === 0 ? ['empty'] : []
   const renderGroup = (group: GroupNode, depth: number): ReactNode => {
     const workspaceId = group.workspaceId
     const children = childrenByParent.get(group.key) ?? []
@@ -485,7 +541,7 @@ function SessionTree({
     const workspaceMarker = workspaceId !== undefined && workspaceDrag?.over?.id === workspaceId
       ? workspaceDrag.over.half
       : null
-    const workspaceDragProps = workspaceId === undefined ? undefined : {
+    const workspaceDragProps = workspaceId === undefined || !reorderable ? undefined : {
       start: () => {
         workspaceDropCommitted.current = false
         setWorkspaceDrag({ workspaceId, over: null })
@@ -551,7 +607,7 @@ function SessionTree({
             }
           }}
       >
-        <ProjectRowItem
+        <WorkspaceHeaderRowItem
           newShortcut={shortcuts.find(row => row.id === 'session.new')}
           group={group}
           openWorkspaceMenu={openWorkspaceMenu} useContextMenu={useContextMenu} useContextMenuTarget={useContextMenuTarget}
@@ -657,6 +713,36 @@ function SessionTree({
   }
 
   const groupRows = rootGroups.map(group => renderGroup(group, 0))
+  // Project section: the project header, then its Workspace groups one indent
+  // level down. Folding the project releases its Workspaces' watermarks the
+  // same way folding a Workspace releases its Sessions'.
+  const renderProject = (project: ProjectNode): ReactNode => {
+    rowKeys.push(`project:${project.key}`)
+    const childRows = project.expanded ? project.workspaces.map(group => renderGroup(group, 1)) : []
+    return (
+      <div key={project.key} className={css.projectSection}>
+        <ProjectNodeItem
+          project={project}
+          openProjectMenu={openProjectMenu}
+          useContextMenu={useContextMenu}
+          useContextMenuTarget={useContextMenuTarget}
+          t={t}
+          onToggle={() => {
+            if (project.expanded) {
+              const memberKeys = new Set(project.workspaces.map(group => group.key))
+              dropWatermarks(key => memberKeys.has(key))
+            }
+            setProjectExpanded(project.key, !project.expanded)
+          }}
+        />
+        {childRows.length > 0 && (
+          <div role="group">
+            {childRows}
+          </div>
+        )}
+      </div>
+    )
+  }
   return (
     <HoverCardGroup className={clsx(css.treeBody, css.wide)}>
       {workspaceDropAtListStart && <span className={css.listTopDropIndicator} aria-hidden="true" />}
@@ -668,10 +754,12 @@ function SessionTree({
         ready={list.phase === 'ready' && workspaceReady && !nativeDragActive}
         resetKey={JSON.stringify([animationResetKey, watermarkMotionKey])}
       >
-        {groups.length === 0 && (
+        {(projectNodes ?? groups).length === 0 && (
           <EmptySessions rowState={rowState} onLeaveArchivedOnly={onLeaveArchivedOnly} t={t} />
         )}
-        {groupRows}
+        {projectNodes !== undefined
+          ? projectNodes.map(project => renderProject(project))
+          : groupRows}
       </AnimatedRows>
       <span className={css.fade} />
     </HoverCardGroup>
@@ -914,6 +1002,8 @@ export function WorkspaceBrowser({
   notifyArchivedNotOpenable,
   renameWorkspace, useWorkspaceActionRequest, settleWorkspaceAction,
   deleteWorkspace,
+  openProjectMenu, requestProjectCreate, settleProjectAction, useProjectActionRequest,
+  createProject, renameProject, deleteProject,
   insertWorkspaceBefore,
   unarchiveSession,
   createWorkspace,
@@ -952,6 +1042,7 @@ export function WorkspaceBrowser({
   const workspaceStreamState = useWorkspaces(state => state.state)
   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
   const pinnedSessionIds = useWorkspaces(state => state.pinnedSessionIds)
+  const storedProjects = useWorkspaces(state => state.projects)
   // Live occupancy of this surface's directory-flow hole (the same source the
   // flow reads): a composition without a picking affordance can add nothing.
   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
@@ -961,6 +1052,11 @@ export function WorkspaceBrowser({
   // without the field; they read as the default hide-archived view.
   const archivedFilter = useStore(s => s.archivedFilter ?? 'default')
   const groupExpansion = useStore(s => s.groupExpansion)
+  const projectExpansion = useStore(s => s.projectExpansion)
+  // A project grouping level appears with the first project: until then the
+  // project view is the previous sibling-Workspace layout, with no empty
+  // unassigned bucket above it.
+  const projects = groupBy === 'project' && storedProjects.length > 0 ? storedProjects : undefined
   const sessionOrderByAccount = useStore(s => s.sessionOrderByAccount)
   // Archived sessions are not openable: the row stays visible under the
   // filter but a click explains instead of navigating.
@@ -1033,8 +1129,8 @@ export function WorkspaceBrowser({
       UNGROUPED_KEY,
       FLAT_SESSION_ORDER_KEY,
       ...workspaces.map(workspace => workspace.workspaceId),
-    ])
-  }, [actions.retainAccountKeys, workspacePhase, workspaces])
+    ], [UNGROUPED_KEY, ...storedProjects.map(project => project.projectId)])
+  }, [actions.retainAccountKeys, storedProjects, workspacePhase, workspaces])
   useEffect(() => {
     if (list.phase !== 'ready' || workspaceReady || orderBy !== 'manual' || currentBlank === undefined) return
     // A first prompt can end blank pinning before the Workspace baseline arrives.
@@ -1111,6 +1207,7 @@ export function WorkspaceBrowser({
   const wsPickerOpen = shortcutState.addRequested
   const wsPlusRef = useRef<HTMLButtonElement>(null)
   const workspaceActionRequest = useWorkspaceActionRequest(value => value)
+  const projectActionRequest = useProjectActionRequest(value => value)
 
   const openSearchResult = (sessionId: SessionId): void => {
     if (archivedSessionIds.includes(sessionId)) {
@@ -1220,7 +1317,9 @@ export function WorkspaceBrowser({
       <div className={clsx(css.sectionHeader, wide && searchSpacingMotionEnabled && css.searchSpacingMotion)}>
         {wide && (
           <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>
-            {groupBy === 'flat' ? t('section.sessions') : t('section.workspaces')}
+            {groupBy === 'flat'
+              ? t('section.sessions')
+              : groupBy === 'project' ? t('section.projects') : t('section.workspaces')}
           </span>
         )}
         {wide && (
@@ -1291,6 +1390,20 @@ export function WorkspaceBrowser({
               onArchivedFilterPick={actions.setArchivedFilter}
               t={t}
             />
+          )}
+          {/* Project creation only exists where projects are the grouping
+              level; the other modes stay about Workspaces alone. */}
+          {wide && groupBy === 'project' && (
+            <Tooltip label={t('project.add')} side="bottom" delayMs={500} portal>
+              <button
+                type="button"
+                className={css.iconButton}
+                aria-label={t('project.add')}
+                onClick={() => { requestProjectCreate() }}
+              >
+                <IconAppsAddOutlineRegular size={16} />
+              </button>
+            </Tooltip>
           )}
           {/* Adding is the button's one action, so a composition with no
               picking affordance has nothing to offer here: the region hides the
@@ -1409,6 +1522,10 @@ export function WorkspaceBrowser({
                 openWorkspaceMenu={openWorkspaceMenu}
                 useContextMenuTarget={useContextMenuTarget}
                 workspaces={orderedWorkspaces}
+                projects={projects}
+                projectExpansion={projectExpansion}
+                setProjectExpanded={actions.setProjectExpanded}
+                openProjectMenu={openProjectMenu}
                 ungroupedSessionIds={orderedUngroupedSessionIds}
                 workspaceReady={workspaceReady}
                 nestWorkspaces={groupBy === 'workspace-tree'}
@@ -1432,6 +1549,10 @@ export function WorkspaceBrowser({
       {workspaceActionRequest !== null && <WorkspaceDialogs key={`${workspaceActionRequest.action}/${workspaceActionRequest.workspaceId}`}
         request={workspaceActionRequest} workspaces={workspaces} renameWorkspace={renameWorkspace} deleteWorkspace={deleteWorkspace}
         settleWorkspaceAction={settleWorkspaceAction} t={t} />}
+      {projectActionRequest !== null && <ProjectDialogs
+        key={`${projectActionRequest.action}/${projectActionRequest.action === 'create' ? '' : projectActionRequest.projectId}`}
+        request={projectActionRequest} projects={storedProjects} createProject={createProject} renameProject={renameProject}
+        deleteProject={deleteProject} settleProjectAction={settleProjectAction} t={t} />}
     </div>
   )
 }

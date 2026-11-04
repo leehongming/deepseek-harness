@@ -83,6 +83,15 @@ describe('WorkspaceBrowser.module.css list', () => {
     expect(declarations('.groupSection + .groupSection')?.get('margin-top')).toBe('4px')
   })
 
+  it('spaces project sections above their Workspace groups', () => {
+    expect(declarations('.projectSection > * + *')?.get('margin-top')).toBe('2px')
+    expect(declarations('.projectSection + .projectSection')?.get('margin-top')).toBe('8px')
+    // The project header keeps the shared tree-row metrics one level up.
+    expect(rowDeclarations('.treeRow')?.get('height')).toBe('34px')
+    expect(rowDeclarations('.projectCount')?.get('font-size')).toBe('12px')
+    expect(rowDeclarations('.projectCount')?.get('color')).toBe('var(--dsw-alias-label-tertiary)')
+  })
+
   it('draws drag targets as a leading chevron joined to the insertion line', () => {
     const listTopMarker = declarations('.listTopDropIndicator')
     const workspaceMarker = declarations('.workspaceDropBefore::before')
@@ -108,7 +117,7 @@ describe('WorkspaceBrowser.module.css list', () => {
     expect(declarations('.fade')?.get('height')).toBe('24px')
     expect(declarations('.sessionOverflowButton')?.get('height')).toBe('28px')
     expect(declarations('.searchExpanded')?.get('height')).toBe('32px')
-    expect(rowDeclarations('.projectRow')?.get('height')).toBe('34px')
+    expect(rowDeclarations('.treeRow')?.get('height')).toBe('34px')
     expect(rowDeclarations('.sessionRow')?.get('height')).toBe('32px')
     // One leading status cell for every session row, grouped or flat: the cell
     // hosts either the row's status dot or the leading seat, and it reserves its
@@ -123,7 +132,7 @@ describe('WorkspaceBrowser.module.css list', () => {
   })
 
   it('shares action spacing and inset backgrounds without moving the title column', () => {
-    for (const selector of ['.projectRow', '.sessionRow']) {
+    for (const selector of ['.treeRow', '.sessionRow']) {
       expect(rowDeclarations(selector)?.get('padding')).toBe('0 8px')
       expect(rowDeclarations(selector)?.get('background-clip')).toBe('padding-box')
       expect(rowDeclarations(selector)?.get('border-inline')).toBe('var(--dsh-sidebar-paint-inset) solid transparent')

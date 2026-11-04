@@ -2,7 +2,7 @@
 
 English | [中文](workspace.zh.md)
 
-A workspace is the persistent record of a directory the user works in: a stable id over a canonical path, a display title, and the ordered account of sessions that belong to it. The subsystem is one package ([dsh-workspace](../../packages/workspace/workspace), `ctx.workspaceRegistry`) — an optional host-side capability, not part of the agent-loop spine, and invisible to models (no tools, no prompt text, no session events). It stores its records through the [storage domain form](storage.md) and validates session membership against [`SessionHeader.cwd`](persistence.md#sessionheader--metadata-beside-the-log), so `storageDomain` and `sessionPersistence` are mandatory startup dependencies: an unavailable persistence peer leaves the plugin pending rather than being mistaken for an empty history. Design record: [domain KV storage Agent Note](../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md); bootstrap and GUI ordering: [Workspace UI product-flow Agent Note](../../.agents/notes/archived/feature/2026-07-25-workspace-ui-product-flow.md).
+A workspace is the persistent record of a directory the user works in: a stable id over a canonical path, a display title, and the ordered account of sessions that belong to it. Above Workspaces, a durable project is a user-named grouping of them: a Workspace belongs to at most one project, and one outside every project is ungrouped. The subsystem is one package ([dsh-workspace](../../packages/workspace/workspace), `ctx.workspaceRegistry`) — an optional host-side capability, not part of the agent-loop spine, and invisible to models (no tools, no prompt text, no session events). It stores its records through two [storage domain](storage.md) units — `workspace` for the directory records and `project` for the groupings — and validates session membership against [`SessionHeader.cwd`](persistence.md#sessionheader--metadata-beside-the-log), so `storageDomain` and `sessionPersistence` are mandatory startup dependencies: an unavailable persistence peer leaves the plugin pending rather than being mistaken for an empty history. Design record: [domain KV storage Agent Note](../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md); bootstrap and GUI ordering: [Workspace UI product-flow Agent Note](../../.agents/notes/archived/feature/2026-07-25-workspace-ui-product-flow.md).
 
 Source: [`packages/workspace/workspace/src/types.ts`](../../packages/workspace/workspace/src/types.ts)
 
@@ -17,6 +17,17 @@ type WorkspaceId = Branded<'WorkspaceId'>
 ```
 
 `WorkspaceId` is a [branded id](core.md#branded-ids). Path identity is separate: `realpathNormalize` (`fs.realpath`; trailing slashes, `..`, and symlinks resolved) is the one uniqueness canon — workspace paths are stored canonicalized, uniqueness is string equality of canonical paths (a symlink to an owned directory collides), and attach-time session cwd checks go through the same canon.
+
+```ts type-equiv
+/**
+ * Identifies one project record: the user-managed grouping a Workspace may
+ * belong to. A generated uuid, like {@link WorkspaceId}, so a rename never
+ * changes the reference anchor.
+ */
+type ProjectId = Branded<'ProjectId'>
+```
+
+`ProjectId` is the same kind of generated uuid, for the [project](#projects) that groups Workspaces: renaming changes the title, never the identity.
 
 ## The workspace entity
 
@@ -119,15 +130,56 @@ interface Workspace {
 
 Ownership truth is the record's ordered `sessionIds`, never derived from session cwd. Membership validates the recorded header cwd against the workspace path; an existing candidate remains owned when its fully qualified cwd fails resolution or directory stat with `ENOENT`. This preserves missing-directory and dangling-symlink accounts without admitting new sessions. Failed writes reject (`insertSessionBefore` account errors as `WorkspaceMoveInvalidError`, storage failures as plain errors); every accepted mutation stamps `updatedAt` and durably prunes candidates that no longer pass the membership check.
 
+<a id="projects"></a>
+## Projects
+
+A project is a durable, user-managed grouping above Workspaces: a title and an ordered member list, with no directory, files, or sessions of its own. Creating, renaming, or deleting a project, and moving a Workspace between projects, never moves, renames, or deletes a Workspace, a directory, or a session.
+
+```ts type-equiv
+/**
+ * One project: a durable, user-managed grouping above Workspaces. A Workspace
+ * belongs to at most one project, a relation the registry enforces across the
+ * complete project set on its write chain; Workspaces outside every project
+ * are ungrouped. Membership changes never move, rename, or delete a Workspace
+ * or any Session.
+ */
+interface Project {
+  /** Stable record id (generated uuid). */
+  readonly id: ProjectId
+
+  /** Display title; unique across projects at the durable boundary. */
+  readonly title: string
+
+  /**
+   * Member Workspaces in project order. Ids whose Workspace registration was
+   * deleted are filtered from this projection; a later project mutation prunes
+   * them from the record.
+   */
+  readonly workspaceIds: readonly WorkspaceId[]
+
+  /** ISO-8601 creation instant, stamped at create and never rewritten. */
+  readonly createdAt: string
+
+  /** ISO-8601 instant of the last durable mutation (create counts as one). */
+  readonly updatedAt: string
+}
+```
+
+Projects are ordered newest created first, and titles are unique across projects at the durable boundary. `createProject(title)` creates an empty project at the front of that order. `renameProject(id, title)` changes only the title and keeps identity, order, and members. `deleteProject(id)` removes the project and leaves its member Workspaces ungrouped, resolving `false` for an unknown id. `assignWorkspaceToProject(workspaceId, projectId?)` appends one Workspace to the target project and drops its membership in any other project in the same write, or ungroups it when `projectId` is omitted; an unknown target rejects with `ProjectNotFoundError`. A blank title rejects with `TypeError` and a duplicate with `ProjectTitleConflictError`, both decided on the project write chain, so a concurrent create or rename cannot interleave between the uniqueness check and the write; the transport trims a requested title before it reaches the registry. `listProjects()` and `getProject(id)` are synchronous cache reads, like their Workspace counterparts.
+
+A Workspace belongs to at most one project. The registry enforces that invariant across the complete project set on its write chain, so two concurrent assignments cannot claim the same Workspace; stored state that claims one Workspace twice, repeats a project id, or repeats a title fails loud at startup as corruption. A member id whose Workspace registration was deleted is not corruption: the projection drops it from that project's `workspaceIds` immediately, and the next project mutation that touches the affected records prunes it from storage. A Workspace already in the target project keeps that membership, and the call writes nothing unless a stale member id needs pruning. Project mutations never write a Workspace record, so Workspace ordering, bootstrap, and schemas are unaffected by the grouping.
+
+All project state lives in a separate `project` storage domain (version 1): one global singleton holding the ordered array of records and no tables. Every create, rename, delete, or membership change replaces that array in one domain write and emits one `domain/changed` notification for the `project` domain, so a mutation is either fully visible or absent, and no second write can leave the grouping half-applied.
+
 ## The registry: `ctx.workspaceRegistry`
 
-`WorkspaceRegistry` ([signatures](#ctxworkspaceregistry--workspaceregistry)) owns registration and resolution. `create(path, title?)` requires a fully qualified path, canonicalizes it, rejects a nonexistent path (the original `ENOENT`) or a non-directory, returns the existing entity unchanged when the canonical path is already owned, and otherwise creates a record with `title ?? defaultWorkspaceTitle(path)` prepended to the durable registry order (different canonical paths may share a display title, and a path with no final segment uses its root spelling). `get(id)` and the ordered `list()` are synchronous cache reads; `resolveByPath(path)` applies the same fully qualified realpath canon without creating. `delete(id)` removes only the registration, order entry, and session account — the directory, user files, live sessions, and persisted logs are never touched, so those sessions become Ungrouped ([reference](../../packages/workspace/workspace/README.md)); unknown ids return `false`. Create and delete persist a pending-mutation marker before their two writes (record + order) can diverge; startup resolves exactly the marked mutation — by deleting the marked table row, which completes an interrupted delete and rolls back an interrupted create (the registration is re-creatable, so rollback is the safe direction) — and an unmarked order/table mismatch fails loud as corruption.
+`WorkspaceRegistry` ([signatures](#ctxworkspaceregistry--workspaceregistry)) owns registration and resolution. `create(path, title?)` requires a fully qualified path, canonicalizes it, rejects a nonexistent path (the original `ENOENT`) or a non-directory, returns the existing entity unchanged when the canonical path is already owned, and otherwise creates a record with `title ?? defaultWorkspaceTitle(path)` prepended to the durable registry order (different canonical paths may share a display title, and a path with no final segment uses its root spelling). `get(id)` and the ordered `list()` are synchronous cache reads; `resolveByPath(path)` applies the same fully qualified realpath canon without creating. `delete(id)` removes only the registration, order entry, and session account — the directory, user files, live sessions, and persisted logs are never touched, so those sessions become Ungrouped ([reference](../../packages/workspace/workspace/README.md)); unknown ids return `false`. Create and delete persist a pending-mutation marker before their two writes (record + order) can diverge; startup resolves exactly the marked mutation — by deleting the marked table row, which completes an interrupted delete and rolls back an interrupted create (the registration is re-creatable, so rollback is the safe direction) — and an unmarked order/table mismatch fails loud as corruption. The same registry owns the project API described under [Projects](#projects); project writes are serialized on their own chain and never write a Workspace record.
 
 Sessions get their cwd at create time from whoever creates them, not from this registry — the API gateway resolves a new session's cwd from the chosen workspace's `path` (falling back to an explicit or default cwd), creates the session so the cwd lands in its immutable [`SessionHeader`](persistence.md#sessionheader--metadata-beside-the-log), then calls `attachSession`, which re-validates that stored header cwd against the workspace path. On the first successful start, the registry bootstraps history from persisted headers alone (`id`, `cwd`, `createdAt` — never event bodies), grouping sessions with a valid canonical cwd into per-directory workspaces, newest first; the initialized marker is written last so an interrupted bootstrap resumes safely. The bootstrap is one-time: cwd-less legacy sessions stay Ungrouped, and sessions created afterwards join a workspace only through `attachSession`.
 
 ## Default Workspace initialization
 
-The controller's `initializeDefault` takes no request: it owns the fixed `default-workspace` directory name, resolves the Documents location, and asks the registry to initialize once. The registry accepts a directory resolver, derives the initial title from the requested directory's final segment rather than the canonical one, and commits the registration with its durable identity. No language reaches the Host — browser consumers label a Workspace still carrying that automatic title through the controller's `workspaceDisplayTitle`, so only the on-screen name follows the reader's language. [First-use behavior and configuration](../../packages/api/workspace-controller/README.md#first-use-workspace) describe reuse and failure handling.
+The controller's `initializeDefault` takes no request: it owns the fixed `default-workspace` directory name, resolves the Documents location, and asks the registry to initialize once. The registry accepts a directory resolver, derives the initial title from the requested directory's final segment rather than the canonical one, and commits the registration with its durable identity. No language reaches the Host — browser consumers label a Workspace still carrying that automatic title through the controller's `workspaceDisplayTitle`, so only the on-screen name follows the reader's language. [First-use behavior and configuration](../../packages/api/workspace-controller/README.md#first-use-workspace) describe reuse and failure handling. First use creates no Project: the initialized Workspace is ungrouped until a caller assigns it, because no default grouping exists.
 
 ## Session pinning
 
@@ -168,7 +220,7 @@ interface SessionActivity {
 
 ## Consumers
 
-[`dsh-workspace-controller`](../../packages/api/workspace-controller) serves workspace CRUD to GUI clients over `ctx.workspaceRegistry`, and [`dsh-session-controller`](../../packages/api/session-controller) performs the create-session-then-attach flow above. [dsh-agent-instructions](../../packages/context/agent-instructions) is **not** a consumer despite the name: it discovers AGENTS.md-style instruction files under an agent's own cwd and never touches `ctx.workspaceRegistry` — the shared word refers to the user's working directory, not to this registry's entities.
+[`dsh-workspace-controller`](../../packages/api/workspace-controller) serves workspace and project CRUD to GUI clients over `ctx.workspaceRegistry`, and [`dsh-session-controller`](../../packages/api/session-controller) performs the create-session-then-attach flow above. The controller projects the project list into its follow baseline and its `projects` increment, keeping only the member Workspaces the caller's access admits, and maps each project failure to the `project/not-found` or `project/name-conflict` wire error. [dsh-agent-instructions](../../packages/context/agent-instructions) is **not** a consumer despite the name: it discovers AGENTS.md-style instruction files under an agent's own cwd and never touches `ctx.workspaceRegistry` — the shared word refers to the user's working directory, not to this registry's entities.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -387,9 +439,39 @@ Host service backing the generated `ctx.remote.workspace` namespace.
 @Remote('unpinSession') unpinSession(request: WorkspaceUnpinSessionRequest): Promise<WorkspacePinValue>
 
 /**
+ * Create one Project with a unique non-blank title.
+ * @param request - proposed Project title.
+ * @returns the created Project projection.
+ */
+@Remote('createProject') createProject(request: ProjectCreateRequest): Promise<ProjectCreateValue>
+
+/**
+ * Rename one Project to a unique non-blank title.
+ * @param request - Project identity and proposed title.
+ * @returns the updated Project projection.
+ */
+@Remote('renameProject') renameProject(request: ProjectRenameRequest): Promise<ProjectValue>
+
+/**
+ * Delete one Project. Its member Workspaces become ungrouped and are kept.
+ * @param request - Project identity to delete.
+ * @returns deletion confirmation.
+ */
+@Remote('deleteProject') deleteProject(request: ProjectDeleteRequest): Promise<ProjectDeleteValue>
+
+/**
+ * Move one Workspace into a Project, or out of every Project when the
+ * request omits `projectId`.
+ * @param request - Workspace identity and its target Project, if any.
+ * @returns the complete resulting Project list, newest created first.
+ */
+@Remote('assignWorkspaceProject') assignWorkspaceProject(request: ProjectAssignWorkspaceRequest): Promise<ProjectListValue>
+
+/**
  * Stream a complete Workspace baseline followed by ordered increments. A
- * non-owner receives only the Workspaces and Sessions `allows()` admits.
- * When a delivered Workspace is no longer admitted at its next change or
+ * non-owner receives only the Workspaces and Sessions `allows()` admits, and
+ * a Project arrives carrying only the member Workspaces that same access
+ * admits. When a delivered Workspace is no longer admitted at its next change or
  * the next order change, the stream sends a `replace` frame with the
  * complete filtered state instead of a `remove`, because a Client never
  * resurrects a removed Workspace; a `remove` frame reports a deletion and
@@ -528,6 +610,63 @@ delete(id: WorkspaceId): Promise<boolean>
  * @returns the complete committed workspace order.
  */
 insertBefore(id: WorkspaceId, beforeId?: WorkspaceId): Promise<readonly WorkspaceId[]>
+
+/**
+ * Projects in durable display order (newest created first). Membership is
+ * projected against the current Workspace set, so a deleted Workspace never
+ * appears in a project even before its stale id is pruned by a write.
+ * @returns a fresh ordered array of project projections.
+ */
+listProjects(): Project[]
+
+/**
+ * Look up one project by id.
+ * @param id - Project id.
+ * @returns the project projection, or `undefined` when unknown.
+ */
+getProject(id: ProjectId): Project | undefined
+
+/**
+ * Create one empty project at the front of the display order.
+ * @param title - Non-blank display title unique across projects.
+ * @returns the durable project projection.
+ * @throws {TypeError} when the title is blank.
+ * @throws {ProjectTitleConflictError} when another project already uses the title.
+ */
+createProject(title: string): Promise<Project>
+
+/**
+ * Replace one project's display title. Renaming keeps membership, identity,
+ * and order.
+ * @param id - Project to rename.
+ * @param title - Non-blank display title unique across projects.
+ * @returns the renamed project projection.
+ * @throws {ProjectNotFoundError} when no project carries that id.
+ * @throws {TypeError} when the title is blank.
+ * @throws {ProjectTitleConflictError} when another project already uses the title.
+ */
+renameProject(id: ProjectId, title: string): Promise<Project>
+
+/**
+ * Delete one project. Member Workspaces become ungrouped; their records,
+ * directories, and Sessions are untouched. Unknown ids are an idempotent
+ * no-op for domain callers.
+ * @param id - Project to remove.
+ * @returns `true` when a project was deleted, `false` when it was unknown.
+ */
+deleteProject(id: ProjectId): Promise<boolean>
+
+/**
+ * Move one Workspace into a project, append it to that project's members, or
+ * ungroup it. The workspace's membership in any other project is dropped in
+ * the same write, so a Workspace never belongs to two projects. A workspace
+ * already belonging to the target resolves without writing.
+ * @param workspaceId - Workspace whose membership changes.
+ * @param projectId - Target project; omitted ungroups the Workspace.
+ * @returns resolution after durability.
+ * @throws {ProjectNotFoundError} when the target project is unknown.
+ */
+assignWorkspaceToProject(workspaceId: WorkspaceId, projectId?: ProjectId): Promise<void>
 
 /**
  * Archive one session durably. The session must exist (live or in session

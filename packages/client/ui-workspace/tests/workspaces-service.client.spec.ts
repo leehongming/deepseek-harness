@@ -8,7 +8,7 @@ import type {
 import { SessionCreateError } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import type {
-  IWorkspaces, WorkspaceId, WorkspaceSnapshot, WorkspaceView,
+  IWorkspaces, ProjectId, ProjectView, WorkspaceId, WorkspaceSnapshot, WorkspaceView,
 } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { ClientRemote, DirectoryListing } from '@deepseek-ai/dsh-api-remotes/client'
 import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
@@ -96,6 +96,7 @@ function workspaceState(
     items,
     archivedSessionIds,
     pinnedSessionIds: [],
+    projects: [],
     phase,
     state: phase === 'ready' ? 'idle' : 'loading',
     error: null,
@@ -234,6 +235,25 @@ class FakeWorkspaces implements IWorkspaces {
       pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== sessionId),
     }))
   }
+
+  // Project verbs are part of IWorkspaces; this suite drives Workspace
+  // selection, navigation, and archiving only, so the stubs record nothing.
+  readonly createProject = vi.fn<IWorkspaces['createProject']>(
+    async (title: string) => ({ ...projectFixture(`fake-${title}` as ProjectId, title) }),
+  )
+
+  readonly renameProject = vi.fn<IWorkspaces['renameProject']>(
+    async (projectId: ProjectId, title: string) => ({ ...projectFixture(projectId, title) }),
+  )
+
+  readonly deleteProject = vi.fn<IWorkspaces['deleteProject']>(async () => undefined)
+
+  readonly assignWorkspaceProject = vi.fn<IWorkspaces['assignWorkspaceProject']>(async () => undefined)
+}
+
+function projectFixture(projectId: ProjectId, title: string): ProjectView {
+  const timestamp = new Date(0).toISOString()
+  return { projectId, title, workspaceIds: [], createdAt: timestamp, updatedAt: timestamp }
 }
 
 const listing: DirectoryListing = {

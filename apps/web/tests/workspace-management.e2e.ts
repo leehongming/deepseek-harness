@@ -411,9 +411,9 @@ describe('web e2e: workspace management (create / rename / grouping / hover affo
 
   it('switches to the flat "In one list" view and persists the preference', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-ws-flat'))
-    // Grouped default: workspace group rows render (the seeded session sits
-    // under Ungrouped; the created workspaces are empty groups).
-    await expect.poll(() => page.getByText('Workspaces', { exact: true }).count(), { timeout: 10_000 }).toBe(1)
+    // Shipped grouped default is the project view: its section label renders
+    // above the Workspace groups (the seeded session sits under Ungrouped).
+    await expect.poll(() => page.getByText('Projects', { exact: true }).count(), { timeout: 10_000 }).toBe(1)
     // Grouping and ordering moved into the View options menu.
     await page.getByRole('button', { name: 'View options' }).click()
     await page.getByRole('menuitem', { name: 'In one list' }).click()
@@ -422,7 +422,7 @@ describe('web e2e: workspace management (create / rename / grouping / hover affo
     await expect.poll(() => page.getByText('Sessions', { exact: true }).count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
     await expect.poll(() => page.getByText('Ungrouped', { exact: true }).count(), { timeout: 5_000 }).toBe(0)
     await expect.poll(() => page.locator('[role="treeitem"]').count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
-    expect(await page.evaluate(() => localStorage.getItem('dsh.workspace.view.v5'))).toContain('flat')
+    expect(await page.evaluate(() => localStorage.getItem('dsh.workspace.view.v6'))).toContain('flat')
     // Persisted across reload; then restore grouped for inter-spec hygiene.
     const warningStart = tripwire.warnings.length
     await page.reload({ waitUntil: 'load' })

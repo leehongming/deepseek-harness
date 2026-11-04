@@ -3,6 +3,16 @@ import {
   ClientWorkspaceModel, type WorkspaceRemote,
 } from '../src/client/index.ts'
 import type {
+  ProjectAssignWorkspaceRequest,
+  ProjectCreateRequest,
+  ProjectCreateValue,
+  ProjectDeleteRequest,
+  ProjectDeleteValue,
+  ProjectId,
+  ProjectListValue,
+  ProjectRenameRequest,
+  ProjectValue,
+  ProjectView,
   WorkspaceArchiveSessionRequest,
   WorkspaceArchiveValue,
   WorkspaceCreateRequest,
@@ -28,6 +38,21 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 
 const sid = (id: string): SessionId => id as SessionId
 const wid = (id: string): WorkspaceId => id as WorkspaceId
+const pid = (id: string): ProjectId => id as ProjectId
+
+function project(
+  id: string,
+  workspaceIds: readonly WorkspaceId[] = [],
+  updatedAt = '2026-01-01T00:00:00.000Z',
+): ProjectView {
+  return {
+    projectId: pid(id),
+    title: id,
+    workspaceIds,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt,
+  }
+}
 
 function workspace(
   id: string,
@@ -102,6 +127,19 @@ class FakeWorkspaceRemote implements WorkspaceRemote {
     _request: WorkspaceUnpinSessionRequest,
   ) => Promise<RemoteResult<WorkspacePinValue>> = () =>
     Promise.resolve(remoteOk({ pinnedSessionIds: [] }))
+  onCreateProject: (request: ProjectCreateRequest) => Promise<RemoteResult<ProjectCreateValue>> = request =>
+    Promise.resolve(remoteOk({ project: project(request.title) }))
+  onRenameProject: (request: ProjectRenameRequest) => Promise<RemoteResult<ProjectValue>> = request =>
+    Promise.resolve(remoteOk({ project: { ...project(String(request.projectId)), title: request.title } }))
+  onDeleteProject: (_request: ProjectDeleteRequest) => Promise<RemoteResult<ProjectDeleteValue>> = () =>
+    Promise.resolve(remoteOk({ deleted: true }))
+  onAssignWorkspaceProject: (
+    request: ProjectAssignWorkspaceRequest,
+  ) => Promise<RemoteResult<ProjectListValue>> = request => Promise.resolve(remoteOk({
+    projects: request.projectId === undefined
+      ? []
+      : [{ ...project(String(request.projectId)), workspaceIds: [request.workspaceId] }],
+  }))
 
   create(request: WorkspaceCreateRequest): Promise<RemoteResult<WorkspaceCreateValue>> {
     this.record('create', request)
@@ -148,6 +186,26 @@ class FakeWorkspaceRemote implements WorkspaceRemote {
     return this.onUnpinSession(request)
   }
 
+  createProject(request: ProjectCreateRequest): Promise<RemoteResult<ProjectCreateValue>> {
+    this.record('createProject', request)
+    return this.onCreateProject(request)
+  }
+
+  renameProject(request: ProjectRenameRequest): Promise<RemoteResult<ProjectValue>> {
+    this.record('renameProject', request)
+    return this.onRenameProject(request)
+  }
+
+  deleteProject(request: ProjectDeleteRequest): Promise<RemoteResult<ProjectDeleteValue>> {
+    this.record('deleteProject', request)
+    return this.onDeleteProject(request)
+  }
+
+  assignWorkspaceProject(request: ProjectAssignWorkspaceRequest): Promise<RemoteResult<ProjectListValue>> {
+    this.record('assignWorkspaceProject', request)
+    return this.onAssignWorkspaceProject(request)
+  }
+
   follow(_signal?: AbortSignal): RemoteStreamHandle<WorkspaceFollowFrame, never> {
     return streamHandle<WorkspaceFollowFrame>((async function* () {})())
   }
@@ -166,8 +224,9 @@ function baseline(
   items: readonly WorkspaceView[] = [],
   archivedSessionIds: readonly SessionId[] = [],
   pinnedSessionIds: readonly SessionId[] = [],
+  projects: readonly ProjectView[] = [],
 ): void {
-  model.replaceBaseline({ items, archivedSessionIds, pinnedSessionIds })
+  model.replaceBaseline({ items, archivedSessionIds, pinnedSessionIds, projects })
 }
 
 describe('ClientWorkspaceModel', () => {
@@ -504,6 +563,91 @@ describe('ClientWorkspaceModel', () => {
     gate.resolve(remoteOk({ pinnedSessionIds: [] }))
     await expect(pending).resolves.toMatchObject({ ok: true })
     expect(model.getSnapshot().pinnedSessionIds).toEqual(['first', 'second'])
+  })
+
+  it('installs baseline Projects and keeps snapshot identity for an unchanged pushed list', () => {
+    const model = modelFor()
+    baseline(model, [], [], [], [project('group', [wid('one')])])
+    expect(model.getSnapshot().projects).toEqual([project('group', [wid('one')])])
+
+    const before = model.getSnapshot()
+    model.replaceProjects([project('group', [wid('one')])])
+    expect(model.getSnapshot()).toBe(before)
+    model.replaceProjects([project('group', [wid('one'), wid('two')])])
+    expect(model.getSnapshot()).not.toBe(before)
+    expect(model.getSnapshot().projects[0]?.workspaceIds).toEqual([wid('one'), wid('two')])
+  })
+
+  it('applies Project mutation echoes and leaves failed results unchanged', async () => {
+    const remote = new FakeWorkspaceRemote()
+    const model = modelFor(remote)
+    baseline(model, [workspace('one')], [], [], [project('kept')])
+
+    remote.onCreateProject = request => Promise.resolve(remoteOk({
+      project: { ...project(request.title), updatedAt: '2026-02-01T00:00:00.000Z' },
+    }))
+    await expect(model.createProject('fresh')).resolves.toMatchObject({ ok: true })
+    expect(model.getSnapshot().projects.map(row => row.projectId)).toEqual([pid('fresh'), pid('kept')])
+    expect(remote.calls).toContainEqual({ method: 'createProject', request: { title: 'fresh' } })
+
+    remote.onCreateProject = () => Promise.resolve(workspaceError(
+      new RemoteError('project/name-conflict', 'title in use', { name: 'kept' }),
+    ))
+    await expect(model.createProject('kept')).resolves.toMatchObject({ ok: false })
+    expect(model.getSnapshot().projects).toHaveLength(2)
+
+    remote.onRenameProject = request => Promise.resolve(remoteOk({
+      project: { ...project(String(request.projectId)), title: request.title, updatedAt: '2026-02-02T00:00:00.000Z' },
+    }))
+    await expect(model.renameProject(pid('kept'), 'renamed')).resolves.toMatchObject({ ok: true })
+    expect(model.getSnapshot().projects.map(row => row.title)).toEqual(['fresh', 'renamed'])
+
+    remote.onAssignWorkspaceProject = () => Promise.resolve(remoteOk({
+      projects: [project('fresh', [wid('one')]), project('kept', [])],
+    }))
+    await expect(model.assignWorkspaceProject(wid('one'), pid('fresh'))).resolves.toMatchObject({ ok: true })
+    expect(model.getSnapshot().projects).toEqual([project('fresh', [wid('one')]), project('kept', [])])
+    expect(remote.calls).toContainEqual({
+      method: 'assignWorkspaceProject',
+      request: { workspaceId: 'one', projectId: 'fresh' },
+    })
+    await expect(model.assignWorkspaceProject(wid('one'))).resolves.toMatchObject({ ok: true })
+    expect(remote.calls).toContainEqual({ method: 'assignWorkspaceProject', request: { workspaceId: 'one' } })
+
+    remote.onDeleteProject = () => Promise.resolve(workspaceError(
+      new RemoteError('project/not-found', 'unknown project', { projectId: pid('missing') }),
+    ))
+    await expect(model.deleteProject(pid('missing'))).resolves.toMatchObject({ ok: false })
+    expect(model.getSnapshot().projects).toHaveLength(2)
+    remote.onDeleteProject = () => Promise.resolve(remoteOk({ deleted: true }))
+    await expect(model.deleteProject(pid('fresh'))).resolves.toMatchObject({ ok: true })
+    expect(model.getSnapshot().projects.map(row => row.projectId)).toEqual([pid('kept')])
+  })
+
+  it('lets a pushed Project list supersede an older reply and drops superseded ones', async () => {
+    const remote = new FakeWorkspaceRemote()
+    const model = modelFor(remote)
+    const gate = deferred<RemoteResult<ProjectCreateValue>>()
+    remote.onCreateProject = () => gate.promise
+
+    const pending = model.createProject('fresh')
+    model.replaceProjects([project('pushed')])
+    gate.resolve(remoteOk({ project: project('fresh') }))
+    await expect(pending).resolves.toMatchObject({ ok: true })
+    expect(model.getSnapshot().projects.map(row => row.projectId)).toEqual([pid('pushed')])
+
+    const firstGate = deferred<RemoteResult<ProjectValue>>()
+    const secondGate = deferred<RemoteResult<ProjectValue>>()
+    let request = 0
+    remote.onRenameProject = () => request++ === 0 ? firstGate.promise : secondGate.promise
+    const first = model.renameProject(pid('pushed'), 'first')
+    const second = model.renameProject(pid('pushed'), 'second')
+    secondGate.resolve(remoteOk({ project: { ...project('pushed'), title: 'second' } }))
+    await expect(second).resolves.toMatchObject({ ok: true })
+    expect(model.getSnapshot().projects[0]?.title).toBe('second')
+    firstGate.resolve(remoteOk({ project: { ...project('pushed'), title: 'first' } }))
+    await expect(first).resolves.toMatchObject({ ok: true })
+    expect(model.getSnapshot().projects[0]?.title).toBe('second')
   })
 
   it('mirrors the Host pin drop locally when an archive echo lands', async () => {

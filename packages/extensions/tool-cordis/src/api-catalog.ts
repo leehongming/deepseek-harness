@@ -4550,8 +4550,32 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the complete resulting pin set, most recently pinned first.',
       },
       {
+        signature: '@Remote(\'createProject\') createProject(request: ProjectCreateRequest): Promise<ProjectCreateValue>',
+        description: 'Create one Project with a unique non-blank title.',
+        parameters: [{ name: 'request', description: 'proposed Project title.' }],
+        returns: 'the created Project projection.',
+      },
+      {
+        signature: '@Remote(\'renameProject\') renameProject(request: ProjectRenameRequest): Promise<ProjectValue>',
+        description: 'Rename one Project to a unique non-blank title.',
+        parameters: [{ name: 'request', description: 'Project identity and proposed title.' }],
+        returns: 'the updated Project projection.',
+      },
+      {
+        signature: '@Remote(\'deleteProject\') deleteProject(request: ProjectDeleteRequest): Promise<ProjectDeleteValue>',
+        description: 'Delete one Project. Its member Workspaces become ungrouped and are kept.',
+        parameters: [{ name: 'request', description: 'Project identity to delete.' }],
+        returns: 'deletion confirmation.',
+      },
+      {
+        signature: '@Remote(\'assignWorkspaceProject\') assignWorkspaceProject(request: ProjectAssignWorkspaceRequest): Promise<ProjectListValue>',
+        description: 'Move one Workspace into a Project, or out of every Project when the request omits `projectId`.',
+        parameters: [{ name: 'request', description: 'Workspace identity and its target Project, if any.' }],
+        returns: 'the complete resulting Project list, newest created first.',
+      },
+      {
         signature: '@Remote({ mode: \'stream\' }) async *follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame>',
-        description: 'Stream a complete Workspace baseline followed by ordered increments. A non-owner receives only the Workspaces and Sessions `allows()` admits. When a delivered Workspace is no longer admitted at its next change or the next order change, the stream sends a `replace` frame with the complete filtered state instead of a `remove`, because a Client never resurrects a removed Workspace; a `remove` frame reports a deletion and reaches only a Client that received that Workspace.',
+        description: 'Stream a complete Workspace baseline followed by ordered increments. A non-owner receives only the Workspaces and Sessions `allows()` admits, and a Project arrives carrying only the member Workspaces that same access admits. When a delivered Workspace is no longer admitted at its next change or the next order change, the stream sends a `replace` frame with the complete filtered state instead of a `remove`, because a Client never resurrects a removed Workspace; a `remove` frame reports a deletion and reaches only a Client that received that Workspace.',
         parameters: [{ name: 'signal', description: 'generation cancellation.' }],
         returns: 'baseline followed by ordered Workspace increments.',
       },
@@ -4635,6 +4659,45 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Move one workspace within the durable display order, DOM-insertBefore-like. With an anchor it lands before that workspace; without one it appends.',
         parameters: [{ name: 'id', description: 'Workspace to move.' }, { name: 'beforeId', description: 'Workspace anchor; omitted appends.' }],
         returns: 'the complete committed workspace order.',
+      },
+      {
+        signature: 'listProjects(): Project[]',
+        description: 'Projects in durable display order (newest created first). Membership is projected against the current Workspace set, so a deleted Workspace never appears in a project even before its stale id is pruned by a write.',
+        parameters: [],
+        returns: 'a fresh ordered array of project projections.',
+      },
+      {
+        signature: 'getProject(id: ProjectId): Project | undefined',
+        description: 'Look up one project by id.',
+        parameters: [{ name: 'id', description: 'Project id.' }],
+        returns: 'the project projection, or `undefined` when unknown.',
+      },
+      {
+        signature: 'createProject(title: string): Promise<Project>',
+        description: 'Create one empty project at the front of the display order.',
+        parameters: [{ name: 'title', description: 'Non-blank display title unique across projects.' }],
+        returns: 'the durable project projection.',
+        throws: ['{TypeError} when the title is blank.', '{ProjectTitleConflictError} when another project already uses the title.'],
+      },
+      {
+        signature: 'renameProject(id: ProjectId, title: string): Promise<Project>',
+        description: 'Replace one project\'s display title. Renaming keeps membership, identity, and order.',
+        parameters: [{ name: 'id', description: 'Project to rename.' }, { name: 'title', description: 'Non-blank display title unique across projects.' }],
+        returns: 'the renamed project projection.',
+        throws: ['{ProjectNotFoundError} when no project carries that id.', '{TypeError} when the title is blank.', '{ProjectTitleConflictError} when another project already uses the title.'],
+      },
+      {
+        signature: 'deleteProject(id: ProjectId): Promise<boolean>',
+        description: 'Delete one project. Member Workspaces become ungrouped; their records, directories, and Sessions are untouched. Unknown ids are an idempotent no-op for domain callers.',
+        parameters: [{ name: 'id', description: 'Project to remove.' }],
+        returns: '`true` when a project was deleted, `false` when it was unknown.',
+      },
+      {
+        signature: 'assignWorkspaceToProject(workspaceId: WorkspaceId, projectId?: ProjectId): Promise<void>',
+        description: 'Move one Workspace into a project, append it to that project\'s members, or ungroup it. The workspace\'s membership in any other project is dropped in the same write, so a Workspace never belongs to two projects. A workspace already belonging to the target resolves without writing.',
+        parameters: [{ name: 'workspaceId', description: 'Workspace whose membership changes.' }, { name: 'projectId', description: 'Target project; omitted ungroups the Workspace.' }],
+        returns: 'resolution after durability.',
+        throws: ['{ProjectNotFoundError} when the target project is unknown.'],
       },
       {
         signature: 'archiveSession(sessionId: SessionId, options: ArchiveSessionOptions = {}): Promise<void>',
@@ -7620,6 +7683,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ProfileReconciliation {\n    warnings: string[];\n    pending: PendingModule[];\n    restartReason?: \'module-comparison\' | \'package-moved\';\n}',
   },
   {
+    name: 'Project',
+    declaration: 'export interface Project {\n    readonly id: ProjectId;\n    readonly title: string;\n    readonly workspaceIds: readonly WorkspaceId[];\n    readonly createdAt: string;\n    readonly updatedAt: string;\n}',
+  },
+  {
+    name: 'ProjectAssignWorkspaceRequest',
+    declaration: 'export interface ProjectAssignWorkspaceRequest {\n    readonly workspaceId: WorkspaceId;\n    readonly projectId?: ProjectId;\n}',
+  },
+  {
+    name: 'ProjectCreateRequest',
+    declaration: 'export interface ProjectCreateRequest {\n    readonly title: string;\n}',
+  },
+  {
+    name: 'ProjectCreateValue',
+    declaration: 'export interface ProjectCreateValue {\n    readonly project: ProjectView;\n}',
+  },
+  {
+    name: 'ProjectDeleteRequest',
+    declaration: 'export interface ProjectDeleteRequest {\n    readonly projectId: ProjectId;\n}',
+  },
+  {
+    name: 'ProjectDeleteValue',
+    declaration: 'export interface ProjectDeleteValue {\n    readonly deleted: true;\n}',
+  },
+  {
     name: 'ProjectionChangeListener',
     declaration: 'export type ProjectionChangeListener = (session: Session, key: Extract<keyof SessionProjectionMap, string>, value: unknown, seq: SessionSeq) => void;',
   },
@@ -7646,6 +7733,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ProjectionSnapshot',
     declaration: 'export interface ProjectionSnapshot {\n    asOfSeq: SessionSeqCursor;\n    values: Partial<SessionProjectionMap>;\n}',
+  },
+  {
+    name: 'ProjectListValue',
+    declaration: 'export interface ProjectListValue {\n    readonly projects: readonly ProjectView[];\n}',
+  },
+  {
+    name: 'ProjectRenameRequest',
+    declaration: 'export interface ProjectRenameRequest {\n    readonly projectId: ProjectId;\n    readonly title: string;\n}',
+  },
+  {
+    name: 'ProjectValue',
+    declaration: 'export interface ProjectValue {\n    readonly project: ProjectView;\n}',
+  },
+  {
+    name: 'ProjectView',
+    declaration: 'export interface ProjectView {\n    readonly projectId: ProjectId;\n    readonly title: string;\n    readonly workspaceIds: readonly WorkspaceId[];\n    readonly createdAt: string;\n    readonly updatedAt: string;\n}',
   },
   {
     name: 'PromptAssembly',
@@ -10093,7 +10196,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WorkspaceBaseline',
-    declaration: 'export interface WorkspaceBaseline {\n    readonly items: readonly WorkspaceView[];\n    readonly archivedSessionIds: readonly SessionId[];\n    readonly pinnedSessionIds: readonly SessionId[];\n}',
+    declaration: 'export interface WorkspaceBaseline {\n    readonly items: readonly WorkspaceView[];\n    readonly archivedSessionIds: readonly SessionId[];\n    readonly pinnedSessionIds: readonly SessionId[];\n    readonly projects: readonly ProjectView[];\n}',
   },
   {
     name: 'WorkspaceByteRange',
@@ -10177,7 +10280,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WorkspaceFollowIncrement',
-    declaration: 'export type WorkspaceFollowIncrement = {\n    readonly type: \'replace\';\n    readonly value: WorkspaceBaseline;\n} | {\n    readonly type: \'upsert\';\n    readonly workspace: WorkspaceView;\n} | {\n    readonly type: \'remove\';\n    readonly workspaceId: WorkspaceId;\n} | {\n    readonly type: \'order\';\n    readonly workspaceIds: readonly WorkspaceId[];\n} | {\n    readonly type: \'archived\';\n    readonly archivedSessionIds: readonly SessionId[];\n} | {\n    readonly type: \'pinned\';\n    readonly pinnedSessionIds: readonly SessionId[];\n};',
+    declaration: 'export type WorkspaceFollowIncrement = {\n    readonly type: \'replace\';\n    readonly value: WorkspaceBaseline;\n} | {\n    readonly type: \'upsert\';\n    readonly workspace: WorkspaceView;\n} | {\n    readonly type: \'remove\';\n    readonly workspaceId: WorkspaceId;\n} | {\n    readonly type: \'order\';\n    readonly workspaceIds: readonly WorkspaceId[];\n} | {\n    readonly type: \'archived\';\n    readonly archivedSessionIds: readonly SessionId[];\n} | {\n    readonly type: \'pinned\';\n    readonly pinnedSessionIds: readonly SessionId[];\n} | {\n    readonly type: \'projects\';\n    readonly projects: readonly ProjectView[];\n};',
   },
   {
     name: 'WorkspaceInsertBeforeRequest',

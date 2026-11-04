@@ -3,8 +3,11 @@
  *
  * - WorkspaceBrowser fills the sidebar shell's `sidebar.workspaces` hole —
  *   the whole browsing region (section header, search, grouped/flat session
- *   list, workspace dialogs). It registers this package's viewing store and
- *   consumes the shell's two-fact owner share (wide / expandSidebar).
+ *   list, workspace and project dialogs). It registers this package's viewing
+ *   store and consumes the shell's two-fact owner share (wide / expandSidebar).
+ *   Project headers register their captured row in ctx.contextMenus under the
+ *   `project` target; project dialogs are raised through the injected
+ *   action-request source, as the Workspace dialogs are.
  * - WorkspacePicker fills the conversation empty-state hole (menu + error
  *   dialog shared with the browser).
  *
@@ -45,7 +48,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SessionSearchResultItem } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
-import type { SessionActivity, WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionActivity, ProjectId, WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ShortcutCatalogEntry } from '@deepseek-ai/dsh-client-shortcuts/client'
 import type { WorkspaceShortcutState } from '../shortcuts.ts'
@@ -57,16 +60,32 @@ declare module '@deepseek-ai/dsh-client-ui-context-menu/client' {
   interface ContextMenuTargetMap {
     /** Registered Workspace header; path and title belong to the clicked row. */
     workspace: { readonly workspaceId: WorkspaceId; readonly path: string; readonly displayTitle: string }
+    /** Project header row; the title belongs to the clicked row and drives its dialogs. */
+    project: { readonly projectId: ProjectId; readonly title: string; readonly workspaceCount: number }
   }
 }
 
-/** One request for the existing Workspace rename or delete dialog. */
+/** One request for the Workspace rename or delete dialog. */
 export type WorkspaceActionRequest = {
   readonly action: 'rename' | 'delete'
   readonly workspaceId: WorkspaceId
   readonly displayTitle: string
   readonly storedTitle: string
 }
+
+/**
+ * One request for a project dialog: the create form, or a captured project's
+ * rename/delete form. The captured title and Workspace count keep a dialog
+ * meaningful while the project list changes underneath it.
+ */
+export type ProjectActionRequest =
+  | { readonly action: 'create' }
+  | {
+    readonly action: 'rename' | 'delete'
+    readonly projectId: ProjectId
+    readonly title: string
+    readonly workspaceCount: number
+  }
 
 /**
  * Owner share of the directory-flow holes: the complete conversation between
@@ -245,10 +264,23 @@ export type WorkspaceBrowserInjected = {
   openWorkspaceMenu: (workspaceId: WorkspaceId, path: string, displayTitle: string, point: { x: number; y: number }, mode?: 'toggle') => void
   /** Dismiss the settled Workspace dialog. */
   settleWorkspaceAction: () => void
+  /** Open the registered project's actions without changing expansion or selection. */
+  openProjectMenu: (projectId: ProjectId, title: string, workspaceCount: number, point: { x: number; y: number }, mode?: 'toggle') => void
+  /** Raise the create-project dialog. */
+  requestProjectCreate: () => void
+  /** Dismiss the settled project dialog. */
+  settleProjectAction: () => void
+  /** Create a project from a non-blank title; rejects on a duplicate title. */
+  createProject: (title: string) => Promise<void>
+  /** Rename a project; rejects on a duplicate title. */
+  renameProject: (projectId: ProjectId, title: string) => Promise<void>
+  /** Delete only the project grouping; its Workspaces become unassigned. */
+  deleteProject: (projectId: ProjectId) => Promise<void>
   /** Open actions for the clicked Session without selecting it. */
   openSessionMenu: (sessionId: SessionId, displayTitle: string, point: { x: number; y: number }, mode?: 'toggle') => void
   hooks: DirectoryPickingInjected['hooks'] & {
     workspaceActionRequest: HostObservable<WorkspaceActionRequest | null>
+    projectActionRequest: HostObservable<ProjectActionRequest | null>
     contextMenuTarget: HostObservable<ContextMenuTarget | null>
     /**
      * Fixed Host facts, reached through a hook rather than injected as values:

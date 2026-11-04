@@ -18,8 +18,8 @@ import {
   WorkspaceCreateError,
   type WorkspaceFollowSink,
 } from '../src/client/index.ts'
-import type { WorkspaceFollowFrame, WorkspaceId } from '../src/types.ts'
-import { FOLLOW, baseline, err, followGenerations, workspace, workspaceWorld } from './remote/workspace.client.ts'
+import type { ProjectId, WorkspaceFollowFrame, WorkspaceId } from '../src/types.ts'
+import { FOLLOW, baseline, err, followGenerations, project, workspace, workspaceWorld } from './remote/workspace.client.ts'
 
 const SELF = '@deepseek-ai/dsh-api-workspace-controller'
 /** The plugin as the web bundle composes it: itself plus the Gateway client, the Connection, and the Typert registry. */
@@ -32,6 +32,7 @@ const it = createClientTest({ roster: API_ROSTER })
 const COLD_BOOT_TIMEOUT_MS = 60_000
 
 const wid = (id: string): WorkspaceId => id as WorkspaceId
+const pid = (id: string): ProjectId => id as ProjectId
 const sid = (id: string): SessionId => SessionId(id)
 
 /** Boot the plugin with `follow` answering its state stream. */
@@ -60,6 +61,7 @@ function accepts(overrides: Partial<WorkspaceFollowSink> = {}): WorkspaceFollowS
     replaceOrder: ignore,
     replaceArchived: ignore,
     replacePinned: ignore,
+    replaceProjects: ignore,
     ...overrides,
   }
 }
@@ -156,6 +158,7 @@ describe('Workspace state stream', () => {
       { type: 'order', workspaceIds: [view.workspaceId] },
       { type: 'archived', archivedSessionIds: [sid('session-one')] },
       { type: 'pinned', pinnedSessionIds: [sid('session-two')] },
+      { type: 'projects', projects: [project('group', [view.workspaceId])] },
     ]
     mock.stream(FOLLOW, openStream([opening, ...increments]))
     const replaceBaseline = vi.fn<WorkspaceFollowSink['replaceBaseline']>()
@@ -164,14 +167,17 @@ describe('Workspace state stream', () => {
     const replaceOrder = vi.fn<WorkspaceFollowSink['replaceOrder']>()
     const replaceArchived = vi.fn<WorkspaceFollowSink['replaceArchived']>()
     const replacePinned = vi.fn<WorkspaceFollowSink['replacePinned']>()
+    const replaceProjects = vi.fn<WorkspaceFollowSink['replaceProjects']>()
     const stream = createWorkspaceStateStream(remote, {
-      accept: accepts({ replaceBaseline, upsertView, removeView, replaceOrder, replaceArchived, replacePinned }),
+      accept: accepts({
+        replaceBaseline, upsertView, removeView, replaceOrder, replaceArchived, replacePinned, replaceProjects,
+      }),
       failed: vi.fn(),
     })
 
     stream.start()
     stream.start()
-    await vi.waitFor(() => { expect(replacePinned).toHaveBeenCalledOnce() })
+    await vi.waitFor(() => { expect(replaceProjects).toHaveBeenCalledOnce() })
 
     expect(replaceBaseline).toHaveBeenCalledWith(opening.value)
     expect(upsertView).toHaveBeenCalledWith(view)
@@ -179,6 +185,7 @@ describe('Workspace state stream', () => {
     expect(replaceOrder).toHaveBeenCalledWith([view.workspaceId])
     expect(replaceArchived).toHaveBeenCalledWith(['session-one'])
     expect(replacePinned).toHaveBeenCalledWith(['session-two'])
+    expect(replaceProjects).toHaveBeenCalledWith([project('group', [view.workspaceId])])
     await stream.dispose()
     expect(streamStates(mock)).toEqual(['cancelled'])
   })
@@ -346,7 +353,7 @@ describe('WorkspaceController', () => {
   it('returns no Workspace when startup is ineligible without changing the list', async ({ mock, start }) => {
     const { remote, client } = await gatewayClient(mock, start)
     const model = new ClientWorkspaceModel(remote.workspace)
-    model.replaceBaseline({ items: [], archivedSessionIds: [], pinnedSessionIds: [] })
+    model.replaceBaseline({ items: [], archivedSessionIds: [], pinnedSessionIds: [], projects: [] })
     const controller = new WorkspaceController(client.ctx, model)
     const before = model.getSnapshot()
     mock.remote.workspace.initializeDefault.mockResolvedValueOnce({ ok: true, value: undefined })
@@ -357,7 +364,7 @@ describe('WorkspaceController', () => {
   it('publishes the model source and exposes successful Workspace commands', async ({ mock, start }) => {
     const { remote, client } = await gatewayClient(mock, start)
     const model = new ClientWorkspaceModel(remote.workspace)
-    model.replaceBaseline({ items: [workspace('one')], archivedSessionIds: [], pinnedSessionIds: [] })
+    model.replaceBaseline({ items: [workspace('one')], archivedSessionIds: [], pinnedSessionIds: [], projects: [] })
     const controller = new WorkspaceController(client.ctx, model)
 
     expect(controller.list).toBe(model)
@@ -374,6 +381,11 @@ describe('WorkspaceController', () => {
     await expect(controller.pinSession(sid('session'))).resolves.toBeUndefined()
     await expect(controller.unpinSession(sid('session'))).resolves.toBeUndefined()
     await expect(controller.delete(wid('one'))).resolves.toBeUndefined()
+    await expect(controller.createProject('Product')).resolves.toMatchObject({ projectId: 'Product', title: 'Product' })
+    await expect(controller.renameProject(pid('group'), 'Platform')).resolves.toMatchObject({ title: 'Platform' })
+    await expect(controller.assignWorkspaceProject(wid('one'), pid('group'))).resolves.toBeUndefined()
+    await expect(controller.assignWorkspaceProject(wid('one'))).resolves.toBeUndefined()
+    await expect(controller.deleteProject(pid('group'))).resolves.toBeUndefined()
     // Each command crosses the wire as one positional request object.
     expect(mock.log.requests('workspace/create')).toEqual([{ path: '/work/created' }])
     expect(mock.log.requests('workspace/rename')).toEqual([{ workspaceId: 'one', title: 'renamed' }])
@@ -385,6 +397,13 @@ describe('WorkspaceController', () => {
     expect(mock.log.requests('workspace/pinSession')).toEqual([{ sessionId: 'session' }])
     expect(mock.log.requests('workspace/unpinSession')).toEqual([{ sessionId: 'session' }])
     expect(mock.log.requests('workspace/delete')).toEqual([{ workspaceId: 'one' }])
+    expect(mock.log.requests('workspace/createProject')).toEqual([{ title: 'Product' }])
+    expect(mock.log.requests('workspace/renameProject')).toEqual([{ projectId: 'group', title: 'Platform' }])
+    expect(mock.log.requests('workspace/assignWorkspaceProject')).toEqual([
+      { workspaceId: 'one', projectId: 'group' },
+      { workspaceId: 'one' },
+    ])
+    expect(mock.log.requests('workspace/deleteProject')).toEqual([{ projectId: 'group' }])
   })
 
   it('maps generated business failures to the command facade errors', async ({ mock, start }) => {
@@ -435,6 +454,21 @@ describe('WorkspaceController', () => {
     )))
     await expect(controller.insertSessionBefore(wid('missing'), sid('session')))
       .rejects.toThrow('workspace move failed: workspace/move-invalid: invalid move')
+
+    const missingProject = new RemoteError('project/not-found', 'unknown project', { projectId: pid('missing') })
+    const conflictProject = new RemoteError('project/name-conflict', 'title in use', { name: 'occupied' })
+    mock.remote.workspace.createProject.mockResolvedValueOnce(err(conflictProject))
+    await expect(controller.createProject('occupied'))
+      .rejects.toThrow('workspace project create failed: project/name-conflict: title in use')
+    mock.remote.workspace.renameProject.mockResolvedValueOnce(err(missingProject))
+    await expect(controller.renameProject(pid('missing'), 'name'))
+      .rejects.toThrow('workspace project rename failed: project/not-found: unknown project')
+    mock.remote.workspace.deleteProject.mockResolvedValueOnce(err(missingProject))
+    await expect(controller.deleteProject(pid('missing')))
+      .rejects.toThrow('workspace project delete failed: project/not-found: unknown project')
+    mock.remote.workspace.assignWorkspaceProject.mockResolvedValueOnce(err(missingProject))
+    await expect(controller.assignWorkspaceProject(wid('one'), pid('missing')))
+      .rejects.toThrow('workspace project assign failed: project/not-found: unknown project')
   })
 
   it('receives a carrier throw as the client\'s gateway/internal fold, never as a rejection', async ({ mock, start }) => {

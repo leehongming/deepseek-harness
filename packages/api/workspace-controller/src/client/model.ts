@@ -5,6 +5,15 @@ import type {} from '@deepseek-ai/dsh-api-workspace-controller/remote'
 import { isRemoteFailure } from '@deepseek-ai/dsh-api-gateway/client'
 import type { RemoteFailure, RemoteResult, TypertClientRemote } from '@deepseek-ai/dsh-typert-protocol'
 import type {
+  ProjectAssignWorkspaceRequest,
+  ProjectCreateRequest,
+  ProjectCreateValue,
+  ProjectDeleteRequest,
+  ProjectDeleteValue,
+  ProjectListValue,
+  ProjectRenameRequest,
+  ProjectValue,
+  ProjectView,
   WorkspaceArchiveSessionRequest,
   WorkspaceArchiveValue,
   WorkspaceBaseline,
@@ -35,6 +44,8 @@ export interface WorkspaceSnapshot {
   readonly archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds']
   /** Complete registry-global pin set, most recently pinned first. */
   readonly pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']
+  /** Every Project in Host display order, newest created first. */
+  readonly projects: readonly ProjectView[]
   readonly state: 'idle' | 'loading' | 'error'
   readonly phase: WorkspaceListPhase
   readonly error: RemoteFailure | null
@@ -54,6 +65,8 @@ export interface WorkspaceFollowSink {
   replaceArchived(sessionIds: WorkspaceArchiveValue['archivedSessionIds']): void
   /** Replace the complete pinned Session set. */
   replacePinned(pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']): void
+  /** Replace the complete Project list. */
+  replaceProjects(projects: readonly ProjectView[]): void
 }
 
 /**
@@ -63,6 +76,7 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   private items: readonly WorkspaceView[] = []
   private archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds'] = []
   private pinnedSessionIds: WorkspacePinValue['pinnedSessionIds'] = []
+  private projects: readonly ProjectView[] = []
   private state: WorkspaceSnapshot['state'] = 'loading'
   private phase: WorkspaceListPhase = 'pending'
   private error: RemoteFailure | null = null
@@ -76,6 +90,8 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   private archiveRequestSeq = 0
   /** Latest pin-set request; a later request or a pushed set supersedes it. */
   private pinRequestSeq = 0
+  /** Latest Project-list request; a later request or a pushed list supersedes it. */
+  private projectRequestSeq = 0
   /** Host Workspace ids are never reused, so delayed data cannot resurrect a removed row. */
   private readonly removedIds = new Set<WorkspaceId>()
   private readonly listeners = new Set<() => void>()
@@ -258,16 +274,95 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   }
 
   /**
+   * Create a Project and install the returned row ahead of the local list.
+   * A reply superseded by a later Project request or a pushed list installs nothing.
+   * @param title - unique non-blank Project title.
+   * @returns generated Remote result.
+   */
+  async createProject(title: ProjectCreateRequest['title']): Promise<RemoteResult<ProjectCreateValue>> {
+    const requestSeq = ++this.projectRequestSeq
+    const result = await this.remote.createProject({ title })
+    if (result.ok && requestSeq === this.projectRequestSeq) {
+      this.installProjects([
+        result.value.project,
+        ...this.projects.filter(project => project.projectId !== result.value.project.projectId),
+      ])
+    }
+    return result
+  }
+
+  /**
+   * Rename a Project and install the returned row.
+   * A reply superseded by a later Project request or a pushed list installs nothing.
+   * @param projectId - target Project.
+   * @param title - unique non-blank new title.
+   * @returns generated Remote result.
+   */
+  async renameProject(
+    projectId: ProjectRenameRequest['projectId'],
+    title: ProjectRenameRequest['title'],
+  ): Promise<RemoteResult<ProjectValue>> {
+    const requestSeq = ++this.projectRequestSeq
+    const result = await this.remote.renameProject({ projectId, title })
+    if (result.ok && requestSeq === this.projectRequestSeq) {
+      const renamed = result.value.project
+      this.installProjects(this.projects.map(project =>
+        project.projectId === renamed.projectId ? renamed : project))
+    }
+    return result
+  }
+
+  /**
+   * Delete a Project and drop it from the local list. Its member Workspaces stay.
+   * A reply superseded by a later Project request or a pushed list installs nothing.
+   * @param projectId - target Project.
+   * @returns generated Remote result.
+   */
+  async deleteProject(projectId: ProjectDeleteRequest['projectId']): Promise<RemoteResult<ProjectDeleteValue>> {
+    const requestSeq = ++this.projectRequestSeq
+    const result = await this.remote.deleteProject({ projectId })
+    if (result.ok && requestSeq === this.projectRequestSeq) {
+      this.installProjects(this.projects.filter(project => project.projectId !== projectId))
+    }
+    return result
+  }
+
+  /**
+   * Move a Workspace into a Project, or out of every Project, and install the
+   * returned complete Project list.
+   * A reply superseded by a later Project request or a pushed list installs nothing.
+   * @param workspaceId - Workspace whose Project membership changes.
+   * @param projectId - target Project; omitted removes the Workspace from its Project.
+   * @returns generated Remote result.
+   */
+  async assignWorkspaceProject(
+    workspaceId: ProjectAssignWorkspaceRequest['workspaceId'],
+    projectId?: ProjectAssignWorkspaceRequest['projectId'],
+  ): Promise<RemoteResult<ProjectListValue>> {
+    const requestSeq = ++this.projectRequestSeq
+    const result = await this.remote.assignWorkspaceProject({
+      workspaceId,
+      ...projectId === undefined ? {} : { projectId },
+    })
+    if (result.ok && requestSeq === this.projectRequestSeq) {
+      this.installProjects(result.value.projects)
+    }
+    return result
+  }
+
+  /**
    * Replace the projection from one complete stream-generation baseline.
-   * @param baseline - complete Workspace and archive projection.
+   * @param baseline - complete Workspace, archive, pin, and Project projection.
    */
   replaceBaseline(baseline: WorkspaceBaseline): void {
     this.orderFrameGeneration++
     this.archiveRequestSeq++
     this.pinRequestSeq++
+    this.projectRequestSeq++
     this.installViews(baseline.items)
     this.installArchived(baseline.archivedSessionIds)
     this.installPinned(baseline.pinnedSessionIds)
+    this.installProjects(baseline.projects)
     this.state = 'idle'
     this.phase = 'ready'
     this.error = null
@@ -306,6 +401,15 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
   replacePinned(pinnedSessionIds: WorkspacePinValue['pinnedSessionIds']): void {
     this.pinRequestSeq++
     this.installPinned(pinnedSessionIds)
+  }
+
+  /**
+   * Replace the complete Project list from the current follow generation.
+   * @param projects - complete Host-confirmed Project list, newest created first.
+   */
+  replaceProjects(projects: readonly ProjectView[]): void {
+    this.projectRequestSeq++
+    this.installProjects(projects)
   }
 
   /** Keep the last complete projection visible while a lost carrier reconnects. */
@@ -350,10 +454,17 @@ export class ClientWorkspaceModel implements WorkspaceFollowSink {
       items: this.items,
       archivedSessionIds: this.archivedSessionIds,
       pinnedSessionIds: this.pinnedSessionIds,
+      projects: this.projects,
       state: this.state,
       phase: this.phase,
       error: this.error,
     }
+  }
+
+  private installProjects(projects: readonly ProjectView[]): void {
+    if (sameProjects(projects, this.projects)) return
+    this.projects = projects.map(project => ({ ...project, workspaceIds: [...project.workspaceIds] }))
+    this.invalidate()
   }
 
   private installArchived(archivedSessionIds: WorkspaceArchiveValue['archivedSessionIds']): void {
@@ -464,4 +575,16 @@ function insertIdBefore(
   const without = ids.filter(candidate => candidate !== id)
   const at = beforeId === undefined ? without.length : without.indexOf(beforeId)
   return [...without.slice(0, at), id, ...without.slice(at)]
+}
+
+function sameProjects(left: readonly ProjectView[], right: readonly ProjectView[]): boolean {
+  return left.length === right.length && left.every((project, index) => {
+    const candidate = right[index]
+    return candidate !== undefined
+      && project.projectId === candidate.projectId
+      && project.title === candidate.title
+      && project.updatedAt === candidate.updatedAt
+      && project.workspaceIds.length === candidate.workspaceIds.length
+      && project.workspaceIds.every((workspaceId, position) => workspaceId === candidate.workspaceIds[position])
+  })
 }

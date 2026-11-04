@@ -49,7 +49,7 @@ Connection 拥有请求 URL 解析、request correlation、`/api` carrier、trus
 
 ### Workspaces
 
-[`api/workspace-controller`](../../packages/api/workspace-controller/README.zh.md)把 Workspace 变更策略与权威 follow feed 留在 Host。`ClientWorkspaceModel` 拥有浏览器行、Workspace 顺序、归档与置顶 Session id 数组、命令回显，以及流与一元调用的竞态合并。每代 stream 先给出完整 baseline，再给出 `upsert`、`remove`、`order`、`archived` 和 `pinned` increment；重连时以新 baseline 替换 model。`WorkspaceController` 把该 model 作为 `ctx.workspaces` 公开，`ui-workspace` 则提供 `useWorkspaces` 与导航回调。侧边栏的 `ArchivedFilter` 控制列表与搜索中的默认隐藏、显示已归档或仅显示已归档。归档行保留排序位置、置灰展示，必须通过行菜单或搜索结果的取消归档操作恢复后才能打开。恢复调用 `workspace.unarchiveSession`，完整归档集合通过一元响应及 `archived` increment 到达 Client。Session 显示顺序保存在浏览器本地，包含隐藏归档项；置顶在该完整顺序内移动 Session，取消置顶不恢复先前位置。
+[`api/workspace-controller`](../../packages/api/workspace-controller/README.zh.md)把 Workspace 与 Project 的变更策略与权威 follow feed 留在 Host。`ClientWorkspaceModel` 拥有浏览器行、Workspace 顺序、Project 列表、归档与置顶 Session id 数组、命令回显，以及流与一元调用的竞态合并。每代 stream 先给出完整 baseline，再给出 `upsert`、`remove`、`order`、`archived`、`pinned` 和 `projects` increment；重连时以新 baseline 替换 model。`WorkspaceController` 把该 model 作为 `ctx.workspaces` 公开，其中包含创建、重命名、删除 Project 以及在 Project 之间移动 Workspace 的动词；`ui-workspace` 则提供 `useWorkspaces` 与导航回调，并渲染默认的 `project` 分组模式（Project → Workspace → Session），为不属于任何 Project 的 Workspace 提供未分组分区。侧边栏的 `ArchivedFilter` 控制列表与搜索中的默认隐藏、显示已归档或仅显示已归档。归档行保留排序位置、置灰展示，必须通过行菜单或搜索结果的取消归档操作恢复后才能打开。恢复调用 `workspace.unarchiveSession`，完整归档集合通过一元响应及 `archived` increment 到达 Client。Session 显示顺序保存在浏览器本地，包含隐藏归档项；置顶在该完整顺序内移动 Session，取消置顶不恢复先前位置。
 
 这种配对不会产生第二份业务真相。Host controller 决定持久状态与 mutation outcome；Client model 维护最新可用的本地 projection，在有利于渲染时保持 object identity，并明确 delayed response 与 replacement baseline 的合并规则。
 
@@ -70,7 +70,7 @@ Web 和桌面端共享[代码工作工具偏好](../../packages/client/ui-settin
 | 持久 Session 展示 | Host Session log → packed Remote `follow`/`page` 历史 → Client `SessionEventLikeEntry` window → Conversation Context → target snapshot（`chat`、`trajectory` 或其他已注册 target）→ Slot view → React |
 | 瞬态 Session control | Host control baseline → Remote snapshot stream → `SessionManager` projection store → Session 与 list snapshot → 标准 hook → component |
 | 后台任务 | Host job 注册表 → `job.list` / `job.follow` → [`ClientJobs`](../../packages/api/job-controller/README.zh.md) 名册与输出视图 → 任务列表和面板 |
-| Workspace 状态 | Host Workspace baseline 与 increment → `ClientWorkspaceModel` → `ctx.workspaces.list` → `useWorkspaces` → sidebar、hero 与 navigation entry |
+| Workspace 与 Project 状态 | Host Workspace baseline 与 increment（含 `projects` increment）→ `ClientWorkspaceModel` → 携带 Project 列表的 `ctx.workspaces.list` 快照 → `useWorkspaces` → sidebar、hero 与 navigation entry |
 | scoped interaction | Host Cordis waterfall → API Remotes `$events` → Session Context 上的 `ctx.remote.$on()` → 所属 UI 包 → result 或 `next()` |
 | 用户 command | component callback → 注册项 inject face 或 Slot owner → `ctx.sessions`、`ctx.workspaces` 或生成的 scoped Remote → Host Controller → 权威 update → stream 或 event projection 回到 Client |
 

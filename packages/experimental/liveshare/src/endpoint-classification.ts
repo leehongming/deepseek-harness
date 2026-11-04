@@ -124,13 +124,17 @@ export const VIEWER_ENDPOINT_CLASSES = {
   'directoryPicker/list': 'owner-only', // owner filesystem picker
   'directoryPicker/pick': 'owner-only', // owner filesystem picker
   'workspace/archiveSession': 'owner-only', // owner archives a Session
+  'workspace/assignWorkspaceProject': 'owner-only', // owner groups Workspaces into projects
   'workspace/create': 'owner-only', // owner creates a Workspace
+  'workspace/createProject': 'owner-only', // owner creates a project
   'workspace/delete': 'owner-only', // owner deletes a Workspace
+  'workspace/deleteProject': 'owner-only', // owner deletes a project
   'workspace/initializeDefault': 'owner-only', // owner initializes the default Workspace
   'workspace/insertBefore': 'owner-only', // owner reorders Workspaces
   'workspace/insertSessionBefore': 'owner-only', // owner reorders Sessions
   'workspace/pinSession': 'owner-only', // owner pins a Session
   'workspace/rename': 'owner-only', // owner renames a Workspace
+  'workspace/renameProject': 'owner-only', // owner renames a project
   'workspace/unarchiveSession': 'owner-only', // owner unarchives a Session
   'workspace/unpinSession': 'owner-only', // owner unpins a Session
   'workspaceFiles/changes': 'owner-only', // owner Workspace file access

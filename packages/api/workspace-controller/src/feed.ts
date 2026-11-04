@@ -1,15 +1,17 @@
-/** Reconnect-safe Workspace baseline and increment producer. */
+/** Reconnect-safe Workspace and Project baseline and increment producer. */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { Deque } from '@deepseek-ai/dsh-deque'
 import type { DomainChanged } from '@deepseek-ai/dsh-storage-domain'
-import type { Workspace, WorkspaceRecord } from '@deepseek-ai/dsh-workspace'
+import type { Project, Workspace, WorkspaceRecord } from '@deepseek-ai/dsh-workspace'
 import {
+  projectDomainState,
   workspaceDomainState,
   workspaceRecord,
   WorkspaceId,
 } from '@deepseek-ai/dsh-workspace'
 import type {
+  ProjectView,
   WorkspaceBaseline,
   WorkspaceFollowFrame,
   WorkspaceView,
@@ -17,6 +19,9 @@ import type {
 
 /** The frames the feed produces: every follow frame except `replace`, which only access filtering sends. */
 type WorkspaceFeedFrame = Exclude<WorkspaceFollowFrame, { readonly type: 'replace' }>
+
+/** The fields one project row contributes to its wire projection, from an entity or a stored record. */
+type ProjectSource = Pick<Project, 'id' | 'title' | 'workspaceIds' | 'createdAt' | 'updatedAt'>
 
 /**
  * Project one authoritative Workspace entity into its Remote value.
@@ -34,6 +39,29 @@ export function workspaceView(workspace: Workspace): WorkspaceView {
   }
 }
 
+/**
+ * Project one durable Project, or its stored record, into its Remote value.
+ * @param project - authoritative registry entity or durable record.
+ * @param registeredWorkspaceIds - current Workspace identities; when given,
+ *   member ids absent from it are dropped, because a deleted Workspace leaves
+ *   the stored record's membership stale until that record's next write.
+ * @returns detached Project projection for Remote consumers.
+ */
+export function projectView(
+  project: ProjectSource,
+  registeredWorkspaceIds?: ReadonlySet<WorkspaceId>,
+): ProjectView {
+  return {
+    projectId: project.id,
+    title: project.title,
+    workspaceIds: registeredWorkspaceIds === undefined
+      ? [...project.workspaceIds]
+      : project.workspaceIds.filter(workspaceId => registeredWorkspaceIds.has(workspaceId)),
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  }
+}
+
 function changedWorkspaceView(workspaceId: string, value: unknown): WorkspaceView {
   const record: WorkspaceRecord = workspaceRecord.parse(value)
   return {
@@ -46,13 +74,14 @@ function changedWorkspaceView(workspaceId: string, value: unknown): WorkspaceVie
   }
 }
 
-/** Owns Workspace domain observation and all active follow generations. */
+/** Owns Workspace and Project domain observation and all active follow generations. */
 export class WorkspaceFeed {
   private readonly followers = new Set<WorkspaceFollower>()
   private knownIds: Set<string>
   private order: readonly string[]
   private archived: readonly string[]
   private pinned: readonly string[]
+  private projects: readonly ProjectView[]
 
   /** @param ctx - Host context containing the authoritative Workspace registry. */
   constructor(private readonly ctx: Context) {
@@ -61,6 +90,7 @@ export class WorkspaceFeed {
     this.order = baseline.map(workspace => String(workspace.id))
     this.archived = ctx.workspaceRegistry.archivedSessionIds.map(String)
     this.pinned = ctx.workspaceRegistry.pinnedSessionIds.map(String)
+    this.projects = this.projectViews(ctx.workspaceRegistry.listProjects())
     ctx.on('domain/changed', (change: DomainChanged) => { this.changed(change) })
     ctx.effect(() => () => {
       for (const follower of this.followers) follower.close()
@@ -70,13 +100,14 @@ export class WorkspaceFeed {
 
   /**
    * Read the complete current projection synchronously.
-   * @returns all active Workspaces plus archived and pinned Session identities.
+   * @returns all active Workspaces, archived and pinned Session identities, and every Project.
    */
   baseline(): WorkspaceBaseline {
     return {
       items: this.ctx.workspaceRegistry.list().map(workspaceView),
       archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds],
       pinnedSessionIds: [...this.ctx.workspaceRegistry.pinnedSessionIds],
+      projects: this.projectViews(this.ctx.workspaceRegistry.listProjects()),
     }
   }
 
@@ -98,7 +129,26 @@ export class WorkspaceFeed {
     }
   }
 
+  /**
+   * Project durable project rows against the registry's current Workspace set.
+   * @param projects - registry projections or stored records in display order.
+   * @returns detached projections whose membership names only registered Workspaces.
+   */
+  private projectViews(projects: readonly ProjectSource[]): ProjectView[] {
+    const registered = new Set(this.ctx.workspaceRegistry.list().map(workspace => workspace.id))
+    return projects.map(project => projectView(project, registered))
+  }
+
   private changed(change: DomainChanged): void {
+    if (change.domain === 'project') {
+      if (change.table !== '' || change.operation !== 'put') return
+      const state = projectDomainState.parse(change.value)
+      const projects = this.projectViews(state.projects)
+      if (sameProjects(this.projects, projects)) return
+      this.projects = projects
+      this.publish({ type: 'projects', projects })
+      return
+    }
     if (change.domain !== 'workspace') return
     if (change.table === '') {
       if (change.operation !== 'put') return
@@ -148,6 +198,17 @@ export class WorkspaceFeed {
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function sameProjects(left: readonly ProjectView[], right: readonly ProjectView[]): boolean {
+  return left.length === right.length && left.every((project, index) => {
+    const candidate = right[index]
+    return candidate !== undefined
+      && project.projectId === candidate.projectId
+      && project.title === candidate.title
+      && project.updatedAt === candidate.updatedAt
+      && sameStrings(project.workspaceIds, candidate.workspaceIds)
+  })
 }
 
 class WorkspaceFollower {

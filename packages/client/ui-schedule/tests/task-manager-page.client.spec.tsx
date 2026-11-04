@@ -101,7 +101,7 @@ const sessions: SessionListState = {
   }] as const)),
   phase: 'ready', projectionsBySession: {},
 }
-const workspaces: WorkspaceSnapshot = { items: [], archivedSessionIds: [], pinnedSessionIds: [], state: 'idle', phase: 'ready', error: null }
+const workspaces: WorkspaceSnapshot = { items: [], archivedSessionIds: [], pinnedSessionIds: [], projects: [], state: 'idle', phase: 'ready', error: null }
 
 /**
  * Session list whose catalog rows carry the given titles.

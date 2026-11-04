@@ -36,6 +36,14 @@ interface WorkspaceView {
   updatedAt: string
 }
 
+interface ProjectView {
+  readonly projectId: string
+  title: string
+  workspaceIds: string[]
+  readonly createdAt: string
+  updatedAt: string
+}
+
 interface EventRecord {
   readonly type: 'event'
   readonly event: {
@@ -90,6 +98,7 @@ interface CapturedFixture {
       readonly items: readonly WorkspaceView[]
       readonly archivedSessionIds: readonly string[]
       readonly pinnedSessionIds: readonly string[]
+      readonly projects: readonly ProjectView[]
     }
   }
   readonly control: ControlBaseline
@@ -121,6 +130,7 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
   const fixture = JSON.parse(fixtureSource) as CapturedFixture
   const sessions = [...structuredClone(fixture.sessionList.value.items)]
   const workspaces = [...structuredClone(fixture.workspace.value.items)]
+  const projects: ProjectView[] = [...structuredClone(fixture.workspace.value.projects)]
   const records = new Map<string, EventRecord[]>([[
     'fx-alpha',
     structuredClone(fixture.follow.records) as EventRecord[],
@@ -191,6 +201,7 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
         items: structuredClone(workspaces),
         archivedSessionIds: structuredClone(fixture.workspace.value.archivedSessionIds),
         pinnedSessionIds: structuredClone(fixture.workspace.value.pinnedSessionIds),
+        projects: structuredClone(projects),
       },
     })
   })
@@ -251,6 +262,57 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
     workspaces.unshift(workspace)
     mock.streams.push('workspace/follow', { type: 'upsert', workspace: structuredClone(workspace) })
     return ok({ workspace: structuredClone(workspace), created: true })
+  })
+  mock.unary('workspace/createProject', (request: unknown) => {
+    const title = recordString(recordValue(request, 'request'), 'title')
+    const now = new Date().toISOString()
+    const project: ProjectView = {
+      projectId: `fx-project-${String(projects.length + 1)}`,
+      title,
+      workspaceIds: [],
+      createdAt: now,
+      updatedAt: now,
+    }
+    projects.unshift(project)
+    mock.streams.push('workspace/follow', { type: 'projects', projects: structuredClone(projects) })
+    return ok({ project: structuredClone(project) })
+  })
+  mock.unary('workspace/renameProject', (request: unknown) => {
+    const payload = recordValue(request, 'request')
+    const project = projectById(projects, recordString(payload, 'projectId'))
+    project.title = recordString(payload, 'title')
+    project.updatedAt = new Date().toISOString()
+    mock.streams.push('workspace/follow', { type: 'projects', projects: structuredClone(projects) })
+    return ok({ project: structuredClone(project) })
+  })
+  mock.unary('workspace/deleteProject', (request: unknown) => {
+    const projectId = recordString(recordValue(request, 'request'), 'projectId')
+    const index = projects.findIndex(candidate => candidate.projectId === projectId)
+    if (index === -1) {
+      return {
+        ok: false,
+        error: { code: 'project/not-found', message: `assembled fixture has no Project ${projectId}`, details: { projectId } },
+      }
+    }
+    projects.splice(index, 1)
+    mock.streams.push('workspace/follow', { type: 'projects', projects: structuredClone(projects) })
+    return ok({ deleted: true })
+  })
+  mock.unary('workspace/assignWorkspaceProject', (request: unknown) => {
+    const payload = recordValue(request, 'request')
+    const workspaceId = recordString(payload, 'workspaceId')
+    const projectId = optionalRecordString(payload, 'projectId')
+    const now = new Date().toISOString()
+    for (const project of projects) {
+      const member = project.workspaceIds.includes(workspaceId)
+      if (project.projectId !== projectId && !member) continue
+      project.workspaceIds = project.projectId === projectId
+        ? [...project.workspaceIds.filter(id => id !== workspaceId), workspaceId]
+        : project.workspaceIds.filter(id => id !== workspaceId)
+      project.updatedAt = now
+    }
+    mock.streams.push('workspace/follow', { type: 'projects', projects: structuredClone(projects) })
+    return ok({ projects: structuredClone(projects) })
   })
   mock.unary('session/create', (request: unknown) => {
     request = recordValue(request, 'request')
@@ -442,6 +504,12 @@ function optionalRecordString(value: unknown, key: string): string | undefined {
   if (selected === undefined) return undefined
   if (typeof selected !== 'string') throw new TypeError(`assembled fixture ${key} must be a string`)
   return selected
+}
+
+function projectById(projects: ProjectView[], projectId: string): ProjectView {
+  const project = projects.find(candidate => candidate.projectId === projectId)
+  if (project === undefined) throw new Error(`assembled fixture: no Project ${projectId}`)
+  return project
 }
 
 function recordArray(value: unknown, key: string): readonly unknown[] {

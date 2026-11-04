@@ -44,3 +44,10 @@ DeepSeek Harness 的领域词汇为每个概念规定一个规范术语。各术
 - **Ralph 循环**：一次面向不可变目标的前台全新 agent 工作流运行。它是由工作流和 subagent 原语组合而成的面向模型的工具策略，不是同会话目标、agent loop（智能体循环）模式、调度器或通用工作流脚本功能。<a id="ralph-loop"></a>
 - **Ralph Round**：[Ralph 循环](#ralph-loop)中的一个全新子会话。子会话不接收父会话或此前子会话的对话种子；共享工作区和一份有界的 [Ralph 交接](#ralph-handoff)承载跨 Round 的状态。<a id="ralph-round"></a>
 - **Ralph 交接**：从一个仍需继续的 Ralph Round 传给下一个 Ralph Round 的规范化、有界结构化报告，包含状态、摘要、证据、后续步骤和阻塞说明。它补充共享工作区，而不取代工作区的权威地位。<a id="ralph-handoff"></a>
+
+<a id="workspace"></a>
+## 工作区
+
+- **工作区（workspace）**：一条持久目录记录：稳定 id、规范路径、显示标题，以及为它记录的会话有序账本。它是一条注册记录，而不是目录本身：删除注册绝不删除文件或会话。
+- **项目（project）**：[工作区](#workspace)之上持久的、由用户管理的分组：一个唯一标题加上分配给它的工作区。一个工作区最多属于一个项目；成员变更绝不移动、重命名或删除工作区或会话。<a id="project"></a>
+- **未分组（ungrouped）**：项目列表在各[项目](#project)之外显示的工作区，以及没有任何工作区记账的会话。<a id="ungrouped"></a>

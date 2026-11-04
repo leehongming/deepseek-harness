@@ -521,6 +521,26 @@ interface WorkspaceView {
   readonly updatedAt: string
 }
 
+interface FixtureProjectView {
+  readonly projectId: string
+  readonly title: string
+  readonly workspaceIds: readonly WorkspaceId[]
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+interface ProjectCreateRequest { readonly title: string }
+interface ProjectCreateValue { readonly project: FixtureProjectView }
+interface ProjectRenameRequest { readonly projectId: string; readonly title: string }
+interface ProjectValue { readonly project: FixtureProjectView }
+interface ProjectDeleteRequest { readonly projectId: string }
+interface ProjectDeleteValue { readonly deleted: true }
+interface ProjectAssignWorkspaceRequest {
+  readonly workspaceId: WorkspaceId
+  readonly projectId?: string
+}
+interface ProjectListValue { readonly projects: readonly FixtureProjectView[] }
+
 interface WorkspaceCreateRequest { readonly path: string }
 interface WorkspaceCreateValue { readonly workspace: WorkspaceView; readonly created: boolean }
 interface WorkspaceRenameRequest { readonly workspaceId: WorkspaceId; readonly title: string }
@@ -548,6 +568,7 @@ type WorkspaceFollowFrame =
       readonly items: readonly WorkspaceView[]
       readonly archivedSessionIds: readonly SessionId[]
       readonly pinnedSessionIds: readonly SessionId[]
+      readonly projects: readonly FixtureProjectView[]
     }
   }
   | { readonly type: 'upsert'; readonly workspace: WorkspaceView }
@@ -555,6 +576,7 @@ type WorkspaceFollowFrame =
   | { readonly type: 'order'; readonly workspaceIds: readonly WorkspaceId[] }
   | { readonly type: 'archived'; readonly archivedSessionIds: readonly SessionId[] }
   | { readonly type: 'pinned'; readonly pinnedSessionIds: readonly SessionId[] }
+  | { readonly type: 'projects'; readonly projects: readonly FixtureProjectView[] }
 
 interface FixtureWorkspaceApi {
   create(request: WorkspaceCreateRequest): Promise<ConnectionRpcResult<WorkspaceCreateValue>>
@@ -564,6 +586,10 @@ interface FixtureWorkspaceApi {
   insertSessionBefore(request: WorkspaceInsertSessionBeforeRequest): Promise<ConnectionRpcResult<WorkspaceValue>>
   archiveSession(request: WorkspaceArchiveSessionRequest): Promise<ConnectionRpcResult<WorkspaceArchiveValue>>
   unarchiveSession(request: WorkspaceUnarchiveSessionRequest): Promise<ConnectionRpcResult<WorkspaceArchiveValue>>
+  createProject(request: ProjectCreateRequest): Promise<ConnectionRpcResult<ProjectCreateValue>>
+  renameProject(request: ProjectRenameRequest): Promise<ConnectionRpcResult<ProjectValue>>
+  deleteProject(request: ProjectDeleteRequest): Promise<ConnectionRpcResult<ProjectDeleteValue>>
+  assignWorkspaceProject(request: ProjectAssignWorkspaceRequest): Promise<ConnectionRpcResult<ProjectListValue>>
 }
 
 interface FixtureWorkspace {
@@ -571,6 +597,14 @@ interface FixtureWorkspace {
   path: string
   title: string
   sessionIds: SessionId[]
+  createdAt: string
+  updatedAt: string
+}
+
+interface FixtureProject {
+  projectId: string
+  title: string
+  workspaceIds: WorkspaceId[]
   createdAt: string
   updatedAt: string
 }
@@ -2253,6 +2287,19 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     updatedAt: fixtureEpoch,
   }]
   let nextWorkspace = 1
+  // Project grouping mirroring the host registry: newest created first, and a
+  // Workspace belongs to at most one project.
+  const projects: FixtureProject[] = []
+  const projectSnapshot = (project: FixtureProject): FixtureProjectView => ({
+    projectId: project.projectId,
+    title: project.title,
+    workspaceIds: [...project.workspaceIds],
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  })
+  const emitProjects = (): void => {
+    emitWorkspace({ type: 'projects', projects: projects.map(projectSnapshot) })
+  }
   // Registry-global archive set mirroring the host: archived sessions keep
   // their workspace accounting slot and only grouping surfaces hide them.
   const archivedSessionIds: SessionId[] = []
@@ -2268,6 +2315,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       items: workspaces.map(workspaceSnapshot),
       archivedSessionIds: [...archivedSessionIds],
       pinnedSessionIds: [...pinnedSessionIds],
+      projects: projects.map(projectSnapshot),
     },
   })
 
@@ -4240,6 +4288,107 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       }
       return sessionOk({ archivedSessionIds: [...archivedSessionIds] })
     },
+    createProject: (request) => {
+      const title = request.title.trim()
+      if (title === '') {
+        return sessionErr({
+          code: 'gateway/bad-request',
+          message: 'Project creation requires a non-blank title',
+          details: {},
+        })
+      }
+      if (projects.some(project => project.title === title)) {
+        return sessionErr({
+          code: 'project/name-conflict',
+          message: `project name '${title}' is already in use`,
+          details: { name: title },
+        })
+      }
+      const now = new Date().toISOString()
+      const created: FixtureProject = {
+        projectId: `fx-project-${String(projects.length + 1)}`,
+        title,
+        workspaceIds: [],
+        createdAt: now,
+        updatedAt: now,
+      }
+      projects.unshift(created)
+      emitProjects()
+      return sessionOk({ project: projectSnapshot(created) })
+    },
+    renameProject: (request) => {
+      const project = projects.find(candidate => candidate.projectId === request.projectId)
+      if (project === undefined) {
+        return sessionErr({
+          code: 'project/not-found',
+          message: `no project ${request.projectId}`,
+          details: { projectId: request.projectId },
+        })
+      }
+      const title = request.title.trim()
+      if (title === '') {
+        return sessionErr({
+          code: 'gateway/bad-request',
+          message: 'Project rename requires a non-blank title',
+          details: {},
+        })
+      }
+      if (projects.some(candidate => candidate !== project && candidate.title === title)) {
+        return sessionErr({
+          code: 'project/name-conflict',
+          message: `project name '${title}' is already in use`,
+          details: { name: title },
+        })
+      }
+      if (project.title !== title) {
+        project.title = title
+        project.updatedAt = new Date().toISOString()
+        emitProjects()
+      }
+      return sessionOk({ project: projectSnapshot(project) })
+    },
+    deleteProject: (request) => {
+      const index = projects.findIndex(project => project.projectId === request.projectId)
+      if (index === -1) {
+        return sessionErr({
+          code: 'project/not-found',
+          message: `no project ${request.projectId}`,
+          details: { projectId: request.projectId },
+        })
+      }
+      projects.splice(index, 1)
+      emitProjects()
+      return sessionOk({ deleted: true })
+    },
+    assignWorkspaceProject: (request) => {
+      if (request.projectId !== undefined
+        && !projects.some(project => project.projectId === request.projectId)) {
+        return sessionErr({
+          code: 'project/not-found',
+          message: `no project ${request.projectId}`,
+          details: { projectId: request.projectId },
+        })
+      }
+      if (!workspaces.some(workspace => workspace.workspaceId === request.workspaceId)) {
+        return sessionErr({
+          code: 'workspace/not-found',
+          message: `no workspace ${request.workspaceId}`,
+          details: { workspaceId: request.workspaceId },
+        })
+      }
+      const now = new Date().toISOString()
+      for (const project of projects) {
+        const isTarget = project.projectId === request.projectId
+        const membership = project.workspaceIds.filter(id => id !== request.workspaceId)
+        const workspaceIds = isTarget ? [...membership, request.workspaceId] : membership
+        if (workspaceIds.length === project.workspaceIds.length
+          && workspaceIds.every((id, position) => id === project.workspaceIds[position])) continue
+        project.workspaceIds = workspaceIds
+        project.updatedAt = now
+      }
+      emitProjects()
+      return sessionOk({ projects: projects.map(projectSnapshot) })
+    },
   }
 
   const rpc: ClientConnectionRpc = {
@@ -4436,6 +4585,12 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         case 'workspace/archiveSession': return workspaceApi.archiveSession(request as WorkspaceArchiveSessionRequest)
         case 'workspace/unarchiveSession': return workspaceApi.unarchiveSession(
           request as WorkspaceUnarchiveSessionRequest,
+        )
+        case 'workspace/createProject': return workspaceApi.createProject(request as ProjectCreateRequest)
+        case 'workspace/renameProject': return workspaceApi.renameProject(request as ProjectRenameRequest)
+        case 'workspace/deleteProject': return workspaceApi.deleteProject(request as ProjectDeleteRequest)
+        case 'workspace/assignWorkspaceProject': return workspaceApi.assignWorkspaceProject(
+          request as ProjectAssignWorkspaceRequest,
         )
         default:
           return Promise.reject(new Error(`fixture connection RPC endpoint ${JSON.stringify(endpoint)} is unavailable`))

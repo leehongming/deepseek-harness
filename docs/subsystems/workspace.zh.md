@@ -2,7 +2,7 @@
 
 [English](workspace.md) | 中文
 
-工作区（workspace）是用户工作目录的持久记录：一个建立在规范路径之上的稳定 id、一个显示标题，以及归属于它的会话的有序账本。该子系统是单个包（package）（[dsh-workspace](../../packages/workspace/workspace)，`ctx.workspaceRegistry`）——一项宿主侧可选能力，不属于 agent loop（智能体循环）主干，并且对模型不可见（没有工具、没有提示词文本、没有会话事件）。它通过[存储领域数据形式](storage.zh.md)存储自己的记录，并对照 [`SessionHeader.cwd`](persistence.zh.md#sessionheader--metadata-beside-the-log) 校验会话成员资格，因此 `storageDomain` 与 `sessionPersistence` 是必需的启动依赖：持久化这一依赖不可用时，插件保持 pending，而不是把这种不可用误当作空历史。设计记录：[领域 KV 存储 Agent Note（agent 决策记录）](../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.zh.md)；引导与 GUI 顺序：[Workspace UI 产品流程 Agent Note](../../.agents/notes/archived/feature/2026-07-25-workspace-ui-product-flow.md)。
+工作区（workspace）是用户工作目录的持久记录：一个建立在规范路径之上的稳定 id、一个显示标题，以及归属于它的会话的有序账本。在工作区之上，持久化的项目（project）是由用户命名的分组：一个工作区最多属于一个项目，不属于任何项目的工作区处于未分组（ungrouped）状态。该子系统是单个包（package）（[dsh-workspace](../../packages/workspace/workspace)，`ctx.workspaceRegistry`）——一项宿主侧可选能力，不属于 agent loop（智能体循环）主干，并且对模型不可见（没有工具、没有提示词文本、没有会话事件）。它通过两个[存储领域](storage.zh.md)单元存储自己的记录——`workspace` 保存目录记录，`project` 保存分组——并对照 [`SessionHeader.cwd`](persistence.zh.md#sessionheader--metadata-beside-the-log) 校验会话成员资格，因此 `storageDomain` 与 `sessionPersistence` 是必需的启动依赖：持久化这一依赖不可用时，插件保持 pending，而不是把这种不可用误当作空历史。设计记录：[领域 KV 存储 Agent Note（agent 决策记录）](../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.zh.md)；引导与 GUI 顺序：[Workspace UI 产品流程 Agent Note](../../.agents/notes/archived/feature/2026-07-25-workspace-ui-product-flow.md)。
 
 源码：[`packages/workspace/workspace/src/types.ts`](../../packages/workspace/workspace/src/types.ts)
 
@@ -17,6 +17,17 @@ type WorkspaceId = Branded<'WorkspaceId'>
 ```
 
 `WorkspaceId` 是[品牌化 id](core.zh.md#branded-ids)。路径标识与之分离：`realpathNormalize`（`fs.realpath`；尾部斜杠、`..` 与符号链接全部解析）是唯一的一套唯一性规范——工作区路径以规范化形式存储，唯一性即规范路径的字符串相等（指向已被拥有目录的符号链接会与之冲突），attach 时的会话 cwd 检查也走同一套规范。
+
+```ts type-equiv
+/**
+ * Identifies one project record: the user-managed grouping a Workspace may
+ * belong to. A generated uuid, like {@link WorkspaceId}, so a rename never
+ * changes the reference anchor.
+ */
+type ProjectId = Branded<'ProjectId'>
+```
+
+`ProjectId` 是同一类生成 uuid，用于对工作区分组的[项目](#projects)：重命名只改标题，绝不改身份。
 
 ## 工作区实体
 
@@ -119,15 +130,56 @@ interface Workspace {
 
 所有权的真源是记录中有序的 `sessionIds`，绝不从会话 cwd 派生。成员资格将记录的 header cwd 与工作区路径校验；已有候选的完全限定 cwd 在路径解析或目录 stat 时返回 `ENOENT`，仍保留其归属。这会保留目录缺失或符号链接失效时的记账关系，但不会接纳新会话。失败的写入会拒绝（`insertSessionBefore` 的账本错误以 `WorkspaceMoveInvalidError` 拒绝，存储失败以普通错误拒绝）；每次被接受的变更都盖上 `updatedAt` 时间戳，并持久修剪不再通过成员资格检查的候选项。
 
+<a id="projects"></a>
+## 项目
+
+项目（project）是工作区之上持久的、由用户管理的分组：一个标题和一份有序的成员列表，本身没有目录、文件或会话。创建、重命名或删除项目，以及在项目之间移动工作区，都不会移动、重命名或删除工作区、目录或会话。
+
+```ts type-equiv
+/**
+ * One project: a durable, user-managed grouping above Workspaces. A Workspace
+ * belongs to at most one project, a relation the registry enforces across the
+ * complete project set on its write chain; Workspaces outside every project
+ * are ungrouped. Membership changes never move, rename, or delete a Workspace
+ * or any Session.
+ */
+interface Project {
+  /** Stable record id (generated uuid). */
+  readonly id: ProjectId
+
+  /** Display title; unique across projects at the durable boundary. */
+  readonly title: string
+
+  /**
+   * Member Workspaces in project order. Ids whose Workspace registration was
+   * deleted are filtered from this projection; a later project mutation prunes
+   * them from the record.
+   */
+  readonly workspaceIds: readonly WorkspaceId[]
+
+  /** ISO-8601 creation instant, stamped at create and never rewritten. */
+  readonly createdAt: string
+
+  /** ISO-8601 instant of the last durable mutation (create counts as one). */
+  readonly updatedAt: string
+}
+```
+
+项目按创建时间从新到旧排序，标题在持久化边界上跨项目唯一。`createProject(title)` 在该顺序最前面创建一个空项目。`renameProject(id, title)` 只改标题，保留身份、顺序和成员。`deleteProject(id)` 删除项目并让其成员工作区变为未分组，未知 id 解析为 `false`。`assignWorkspaceToProject(workspaceId, projectId?)` 把该工作区追加到目标项目，并在同一次写入中丢弃它在其他项目中的成员资格；省略 `projectId` 时把它移出所有项目；未知目标以 `ProjectNotFoundError` 拒绝。空白标题以 `TypeError` 拒绝，重复标题以 `ProjectTitleConflictError` 拒绝，两者都在项目写入链上判定，因此并发的创建或重命名无法在唯一性检查与写入之间穿插；传输层在标题到达注册表之前对其做 trim。`listProjects()` 与 `getProject(id)` 是同步缓存读取，与对应的 `Workspace` 方法一致。
+
+一个工作区最多属于一个项目。注册表在其写入链上跨完整项目集强制这条不变量，因此两次并发分配不会声明同一个工作区；存储状态若把同一个工作区声明两次、重复项目 id 或重复标题，启动时作为损坏大声失败。成员 id 对应的 `Workspace` 注册被删除不算损坏：投影立即把它从该项目的 `workspaceIds` 中丢弃，下一次触碰相关记录的项目变更再从存储中修剪。工作区已在目标项目中时保留该成员资格，除非需要剪除过期成员 id，否则调用不写盘。项目变更绝不写 `Workspace` 记录，因此分组不影响 `Workspace` 顺序、引导和 schema。
+
+所有项目状态存放在独立的 `project` 存储领域（版本 1）中：一个全局单例持有有序记录数组，没有表。每次创建、重命名、删除或成员变更都一次写入替换该数组，并为 `project` 领域发出一次 `domain/changed` 通知，因此变更要么完全可见要么不存在，不会有第二次写入留下半应用的分组。
+
 ## 注册表：`ctx.workspaceRegistry`
 
-`WorkspaceRegistry`（[签名](#ctxworkspaceregistry--workspaceregistry)）拥有注册与解析。`create(path, title?)` 要求完全限定路径并将其规范化，拒绝不存在的路径（原样传出原始 `ENOENT`）或非目录；当规范路径已被拥有时原样返回既有实体；否则创建一条标题为 `title ?? defaultWorkspaceTitle(path)` 的记录并前插到持久的注册表顺序中（不同规范路径可以共享同一显示标题，没有最终路径段时使用根路径拼写）。`get(id)` 与有序的 `list()` 是同步缓存读取；`resolveByPath(path)` 应用同一套完全限定 realpath 规范但不创建。`delete(id)` 只移除注册记录、顺序条目和会话账本——目录、用户文件、实时会话和已持久化日志一概不动，因此这些会话变为 Ungrouped（[参考](../../packages/workspace/workspace/README.zh.md)）；未知 id 返回 `false`。create 与 delete 会在其两次写入（记录 + 顺序）可能分叉之前先持久写入一个待定变更标记；启动时恰好解决被标记的那次变更——通过删除被标记的表行：这会补完被中断的 delete，并回滚被中断的 create（注册可以重建，因此回滚是安全方向）——而没有标记的顺序/表不一致则作为损坏大声失败。
+`WorkspaceRegistry`（[签名](#ctxworkspaceregistry--workspaceregistry)）拥有注册与解析。`create(path, title?)` 要求完全限定路径并将其规范化，拒绝不存在的路径（原样传出原始 `ENOENT`）或非目录；当规范路径已被拥有时原样返回既有实体；否则创建一条标题为 `title ?? defaultWorkspaceTitle(path)` 的记录并前插到持久的注册表顺序中（不同规范路径可以共享同一显示标题，没有最终路径段时使用根路径拼写）。`get(id)` 与有序的 `list()` 是同步缓存读取；`resolveByPath(path)` 应用同一套完全限定 realpath 规范但不创建。`delete(id)` 只移除注册记录、顺序条目和会话账本——目录、用户文件、实时会话和已持久化日志一概不动，因此这些会话变为 Ungrouped（[参考](../../packages/workspace/workspace/README.zh.md)）；未知 id 返回 `false`。create 与 delete 会在其两次写入（记录 + 顺序）可能分叉之前先持久写入一个待定变更标记；启动时恰好解决被标记的那次变更——通过删除被标记的表行：这会补完被中断的 delete，并回滚被中断的 create（注册可以重建，因此回滚是安全方向）——而没有标记的顺序/表不一致则作为损坏大声失败。同一个注册表拥有[项目](#projects)中描述的项目 API；项目写入在各自的操作链上串行，并且绝不写 `Workspace` 记录。
 
 会话的 cwd 在创建时由创建者赋予，而不是由本注册表赋予——API 网关从所选工作区的 `path` 解析新会话的 cwd（回退到显式或默认 cwd），先创建会话使 cwd 落入其不可变的 [`SessionHeader`](persistence.zh.md#sessionheader--metadata-beside-the-log)，再调用 `attachSession`，后者会把已存储的 header cwd 与工作区路径重新校验一遍。首次成功启动时，注册表仅凭已持久化的 header（`id`、`cwd`、`createdAt`——绝不读事件正文）引导历史：把规范 cwd 有效的会话按目录分组为工作区，最新的排在最前；「已初始化」标记最后写入，因此被中断的引导可以安全续跑。引导只发生这一次：没有 cwd 的历史遗留会话保持 Ungrouped，此后创建的会话只能通过 `attachSession` 加入工作区。
 
 ## 默认工作区初始化
 
-控制器的 `initializeDefault` 不接受请求参数：它拥有固定目录名 `default-workspace`，解析 Documents 位置，并请求注册表执行一次初始化。注册表接收目录解析器，以所请求目录（而非规范路径）的最后一段作为初始标题，并将登记与持久化身份一起提交。语言不会传到 Host——浏览器消费方通过控制器的 `workspaceDisplayTitle` 为仍保留该自动标题的工作区加标签，因此只有屏幕上的名称跟随读者语言。[首次使用行为与配置](../../packages/api/workspace-controller/README.zh.md#first-use-workspace)说明复用和失败处理。
+控制器的 `initializeDefault` 不接受请求参数：它拥有固定目录名 `default-workspace`，解析 Documents 位置，并请求注册表执行一次初始化。注册表接收目录解析器，以所请求目录（而非规范路径）的最后一段作为初始标题，并将登记与持久化身份一起提交。语言不会传到 Host——浏览器消费方通过控制器的 `workspaceDisplayTitle` 为仍保留该自动标题的工作区加标签，因此只有屏幕上的名称跟随读者语言。[首次使用行为与配置](../../packages/api/workspace-controller/README.zh.md#first-use-workspace)说明复用和失败处理。首次使用不创建项目：初始化出的工作区在被调用方分配之前一直处于未分组状态，因为不存在默认分组。
 
 ## 会话置顶
 
@@ -168,7 +220,7 @@ interface SessionActivity {
 
 ## 消费方
 
-[`dsh-workspace-controller`](../../packages/api/workspace-controller) 经 `ctx.workspaceRegistry` 向 GUI 客户端提供工作区 CRUD，[`dsh-session-controller`](../../packages/api/session-controller) 执行上文「先建会话再 attach」的流程。[dsh-agent-instructions](../../packages/context/agent-instructions) 尽管名字如此，却**不是**消费方：它在 agent 自己的 cwd 下发现 AGENTS.md 风格的指令文件，从不触碰 `ctx.workspaceRegistry`——两者共用的这个词指的是用户的工作目录，而非本注册表的实体。
+[`dsh-workspace-controller`](../../packages/api/workspace-controller) 经 `ctx.workspaceRegistry` 向 GUI 客户端提供工作区与项目 CRUD，[`dsh-session-controller`](../../packages/api/session-controller) 执行上文「先建会话再 attach」的流程。控制器把项目列表投影进 follow 基线与 `projects` 增量，只保留调用方访问权限允许的成员工作区，并把每个项目失败映射为 `project/not-found` 或 `project/name-conflict` 传输错误。[dsh-agent-instructions](../../packages/context/agent-instructions) 尽管名字如此，却**不是**消费方：它在 agent 自己的 cwd 下发现 AGENTS.md 风格的指令文件，从不触碰 `ctx.workspaceRegistry`——两者共用的这个词指的是用户的工作目录，而非本注册表的实体。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -387,9 +439,39 @@ Host service backing the generated `ctx.remote.workspace` namespace.
 @Remote('unpinSession') unpinSession(request: WorkspaceUnpinSessionRequest): Promise<WorkspacePinValue>
 
 /**
+ * Create one Project with a unique non-blank title.
+ * @param request - proposed Project title.
+ * @returns the created Project projection.
+ */
+@Remote('createProject') createProject(request: ProjectCreateRequest): Promise<ProjectCreateValue>
+
+/**
+ * Rename one Project to a unique non-blank title.
+ * @param request - Project identity and proposed title.
+ * @returns the updated Project projection.
+ */
+@Remote('renameProject') renameProject(request: ProjectRenameRequest): Promise<ProjectValue>
+
+/**
+ * Delete one Project. Its member Workspaces become ungrouped and are kept.
+ * @param request - Project identity to delete.
+ * @returns deletion confirmation.
+ */
+@Remote('deleteProject') deleteProject(request: ProjectDeleteRequest): Promise<ProjectDeleteValue>
+
+/**
+ * Move one Workspace into a Project, or out of every Project when the
+ * request omits `projectId`.
+ * @param request - Workspace identity and its target Project, if any.
+ * @returns the complete resulting Project list, newest created first.
+ */
+@Remote('assignWorkspaceProject') assignWorkspaceProject(request: ProjectAssignWorkspaceRequest): Promise<ProjectListValue>
+
+/**
  * Stream a complete Workspace baseline followed by ordered increments. A
- * non-owner receives only the Workspaces and Sessions `allows()` admits.
- * When a delivered Workspace is no longer admitted at its next change or
+ * non-owner receives only the Workspaces and Sessions `allows()` admits, and
+ * a Project arrives carrying only the member Workspaces that same access
+ * admits. When a delivered Workspace is no longer admitted at its next change or
  * the next order change, the stream sends a `replace` frame with the
  * complete filtered state instead of a `remove`, because a Client never
  * resurrects a removed Workspace; a `remove` frame reports a deletion and
@@ -528,6 +610,63 @@ delete(id: WorkspaceId): Promise<boolean>
  * @returns the complete committed workspace order.
  */
 insertBefore(id: WorkspaceId, beforeId?: WorkspaceId): Promise<readonly WorkspaceId[]>
+
+/**
+ * Projects in durable display order (newest created first). Membership is
+ * projected against the current Workspace set, so a deleted Workspace never
+ * appears in a project even before its stale id is pruned by a write.
+ * @returns a fresh ordered array of project projections.
+ */
+listProjects(): Project[]
+
+/**
+ * Look up one project by id.
+ * @param id - Project id.
+ * @returns the project projection, or `undefined` when unknown.
+ */
+getProject(id: ProjectId): Project | undefined
+
+/**
+ * Create one empty project at the front of the display order.
+ * @param title - Non-blank display title unique across projects.
+ * @returns the durable project projection.
+ * @throws {TypeError} when the title is blank.
+ * @throws {ProjectTitleConflictError} when another project already uses the title.
+ */
+createProject(title: string): Promise<Project>
+
+/**
+ * Replace one project's display title. Renaming keeps membership, identity,
+ * and order.
+ * @param id - Project to rename.
+ * @param title - Non-blank display title unique across projects.
+ * @returns the renamed project projection.
+ * @throws {ProjectNotFoundError} when no project carries that id.
+ * @throws {TypeError} when the title is blank.
+ * @throws {ProjectTitleConflictError} when another project already uses the title.
+ */
+renameProject(id: ProjectId, title: string): Promise<Project>
+
+/**
+ * Delete one project. Member Workspaces become ungrouped; their records,
+ * directories, and Sessions are untouched. Unknown ids are an idempotent
+ * no-op for domain callers.
+ * @param id - Project to remove.
+ * @returns `true` when a project was deleted, `false` when it was unknown.
+ */
+deleteProject(id: ProjectId): Promise<boolean>
+
+/**
+ * Move one Workspace into a project, append it to that project's members, or
+ * ungroup it. The workspace's membership in any other project is dropped in
+ * the same write, so a Workspace never belongs to two projects. A workspace
+ * already belonging to the target resolves without writing.
+ * @param workspaceId - Workspace whose membership changes.
+ * @param projectId - Target project; omitted ungroups the Workspace.
+ * @returns resolution after durability.
+ * @throws {ProjectNotFoundError} when the target project is unknown.
+ */
+assignWorkspaceToProject(workspaceId: WorkspaceId, projectId?: ProjectId): Promise<void>
 
 /**
  * Archive one session durably. The session must exist (live or in session

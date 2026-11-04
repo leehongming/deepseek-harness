@@ -576,7 +576,7 @@ const SERVICE_ROLES: ServiceRole[] = [
     title: 'Workspace entity registry',
     mode: 'core',
     consumers: ['api-workspace-controller', 'api-session-controller'],
-    note: 'Owns WorkspaceId-branded records over the domain facility; stable sessionIds accounts drive Host RPC and GUI projections.',
+    note: 'Owns WorkspaceId- and ProjectId-branded records over the domain facility; stable sessionIds accounts and ordered Project groupings drive Host RPC and GUI projections.',
   },
   {
     key: 'sessionQuery',

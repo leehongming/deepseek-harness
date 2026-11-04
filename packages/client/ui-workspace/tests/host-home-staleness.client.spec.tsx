@@ -55,17 +55,22 @@ async function bench() {
   return { runtime, remote }
 }
 
+/** The Workspace header row's section; the project-grouped tree also renders a project header. */
+function workspaceSection(): HTMLElement {
+  const row = screen.getAllByRole('treeitem')
+    .find(candidate => candidate.getAttribute('data-row-key')?.startsWith('workspace:')) as HTMLElement
+  return row.parentElement as HTMLElement
+}
+
 /** Open the Workspace row's hover card, which is where the home abbreviation shows. */
 function openHoverCard(): void {
-  const row = screen.getByRole('treeitem').parentElement as HTMLElement
-  fireEvent.pointerEnter(row)
+  fireEvent.pointerEnter(workspaceSection())
   act(() => { vi.advanceTimersByTime(800) })
 }
 
 /** Close it again, so the next hover rebuilds the card from current props. */
 function closeHoverCard(): void {
-  const row = screen.getByRole('treeitem').parentElement as HTMLElement
-  fireEvent.pointerLeave(row)
+  fireEvent.pointerLeave(workspaceSection())
   act(() => { vi.advanceTimersByTime(800) })
 }
 

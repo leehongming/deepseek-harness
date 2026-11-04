@@ -8,6 +8,7 @@ import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { RemoteError, type PeerId, type Principal, type RemoteInvocation } from '@deepseek-ai/dsh-typert-protocol'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
+import type { ProjectId } from '@deepseek-ai/dsh-workspace/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import RemoteAccessService, { type RemoteAccessCondition, type RemoteAccessRole } from '@deepseek-ai/dsh-api-remote-access'
 import WorkspaceController from '../src/index.ts'
@@ -204,6 +205,19 @@ describe('WorkspaceController commands', () => {
     vi.spyOn(ctx.workspaceRegistry, 'unpinSession').mockRejectedValueOnce(unpinFailure)
     await expect(controller.unpinSession({ sessionId: SessionId('session') }))
       .rejects.toBe(unpinFailure)
+
+    // Project storage faults are not business failures: they propagate unchanged.
+    const projectFailure = new Error('project storage failed')
+    vi.spyOn(ctx.workspaceRegistry, 'createProject').mockRejectedValueOnce(projectFailure)
+    await expect(controller.createProject({ title: 'unwritten' })).rejects.toBe(projectFailure)
+    vi.spyOn(ctx.workspaceRegistry, 'renameProject').mockRejectedValueOnce(projectFailure)
+    await expect(controller.renameProject({ projectId: 'missing' as ProjectId, title: 'unwritten' }))
+      .rejects.toBe(projectFailure)
+    vi.spyOn(ctx.workspaceRegistry, 'assignWorkspaceToProject').mockRejectedValueOnce(projectFailure)
+    await expect(controller.assignWorkspaceProject({
+      workspaceId: created.workspace.workspaceId,
+      projectId: 'missing' as ProjectId,
+    })).rejects.toBe(projectFailure)
   })
 
   it('resolves queued Workspace identities when their operation starts', async () => {
@@ -331,13 +345,94 @@ describe('WorkspaceController commands', () => {
   })
 })
 
+describe('WorkspaceController projects', () => {
+  it('creates, renames, and deletes Projects with stable failures', async () => {
+    const { controller } = await harness()
+    const created = await controller.createProject({ title: '  Product  ' })
+    expect(created.project).toMatchObject({ title: 'Product', workspaceIds: [] })
+
+    await expect(controller.createProject({ title: '   ' }))
+      .rejects.toMatchObject({ code: 'gateway/bad-request' })
+    await expect(controller.createProject({ title: 'Product' }))
+      .rejects.toMatchObject({ code: 'project/name-conflict', details: { name: 'Product' } })
+
+    const projectId = created.project.projectId
+    await expect(controller.renameProject({ projectId, title: 'Platform' }))
+      .resolves.toMatchObject({ project: { projectId, title: 'Platform' } })
+    await expect(controller.renameProject({ projectId, title: '  ' }))
+      .rejects.toMatchObject({ code: 'gateway/bad-request' })
+    await expect(controller.renameProject({ projectId: 'missing' as ProjectId, title: 'Any' }))
+      .rejects.toMatchObject({ code: 'project/not-found', details: { projectId: 'missing' } })
+
+    const other = await controller.createProject({ title: 'Other' })
+    await expect(controller.renameProject({ projectId: other.project.projectId, title: ' Platform ' }))
+      .rejects.toMatchObject({ code: 'project/name-conflict', details: { name: 'Platform' } })
+
+    await expect(controller.deleteProject({ projectId: 'missing' as ProjectId }))
+      .rejects.toMatchObject({ code: 'project/not-found' })
+    await expect(controller.deleteProject({ projectId })).resolves.toEqual({ deleted: true })
+    await expect(controller.renameProject({ projectId, title: 'gone' }))
+      .rejects.toMatchObject({ code: 'project/not-found' })
+  })
+
+  it('assigns Workspaces into Projects and returns the complete newest-first list', async () => {
+    const { controller, root } = await harness()
+    const alpha = (await controller.create({ path: stageDir(root, 'alpha') })).workspace.workspaceId
+    const beta = (await controller.create({ path: stageDir(root, 'beta') })).workspace.workspaceId
+    const first = (await controller.createProject({ title: 'First' })).project.projectId
+    const second = (await controller.createProject({ title: 'Second' })).project.projectId
+
+    /** Project ids and membership as the caller observes them, newest created first. */
+    const membership = (projects: readonly { readonly projectId: ProjectId; readonly workspaceIds: readonly WorkspaceId[] }[]): unknown =>
+      projects.map(project => ({ projectId: project.projectId, workspaceIds: project.workspaceIds }))
+    const assigned = await controller.assignWorkspaceProject({ workspaceId: alpha, projectId: second })
+    expect(membership(assigned.projects)).toEqual([
+      { projectId: second, workspaceIds: [alpha] },
+      { projectId: first, workspaceIds: [] },
+    ])
+    expect(membership((await controller.assignWorkspaceProject({ workspaceId: beta, projectId: first })).projects))
+      .toEqual([
+        { projectId: second, workspaceIds: [alpha] },
+        { projectId: first, workspaceIds: [beta] },
+      ])
+
+    // Moving alpha replaces its old membership in the same write.
+    expect(membership((await controller.assignWorkspaceProject({ workspaceId: alpha, projectId: first })).projects))
+      .toEqual([
+        { projectId: second, workspaceIds: [] },
+        { projectId: first, workspaceIds: [beta, alpha] },
+      ])
+    // Omitting the target ungroups the Workspace.
+    expect(membership((await controller.assignWorkspaceProject({ workspaceId: alpha })).projects))
+      .toEqual([
+        { projectId: second, workspaceIds: [] },
+        { projectId: first, workspaceIds: [beta] },
+      ])
+
+    await expect(controller.assignWorkspaceProject({ workspaceId: 'missing' as WorkspaceId, projectId: first }))
+      .rejects.toMatchObject({ code: 'workspace/not-found' })
+    await expect(controller.assignWorkspaceProject({ workspaceId: beta, projectId: 'missing' as ProjectId }))
+      .rejects.toMatchObject({ code: 'project/not-found' })
+
+    // Deleting a Project leaves its member Workspaces registered and ungrouped.
+    await controller.deleteProject({ projectId: first })
+    expect(membership((await controller.assignWorkspaceProject({ workspaceId: beta })).projects))
+      .toEqual([{ projectId: second, workspaceIds: [] }])
+    await expect(controller.assignWorkspaceProject({ workspaceId: beta, projectId: first }))
+      .rejects.toMatchObject({ code: 'project/not-found' })
+  })
+})
+
 describe('WorkspaceController follow', () => {
   it('seeds a new feed from existing rows and rejects an inconsistent registry commit', async () => {
     const { ctx, root } = await harness()
     const existing = await ctx.workspaceRegistry.create(stageDir(root, 'existing'))
+    const project = await ctx.workspaceRegistry.createProject('grouped')
+    await ctx.workspaceRegistry.assignWorkspaceToProject(existing.id, project.id)
     const feed = new WorkspaceFeed(ctx)
     expect(feed.baseline()).toMatchObject({
       items: [{ workspaceId: existing.id }],
+      projects: [{ projectId: project.id, title: 'grouped', workspaceIds: [existing.id] }],
     })
 
     expect(() => {
@@ -381,7 +476,7 @@ describe('WorkspaceController follow', () => {
     const iterator = controller.follow(abort.signal)[Symbol.asyncIterator]()
     await expect(nextFrame(iterator)).resolves.toEqual({
       type: 'baseline',
-      value: { items: [], archivedSessionIds: [], pinnedSessionIds: [] },
+      value: { items: [], archivedSessionIds: [], pinnedSessionIds: [], projects: [] },
     })
 
     const first = await controller.create({ path: stageDir(root, 'first') })
@@ -445,6 +540,79 @@ describe('WorkspaceController follow', () => {
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
   })
 
+  it('streams one complete Project list per Project write', async () => {
+    const { controller, root } = await harness()
+    const abort = new AbortController()
+    const iterator = controller.follow(abort.signal)[Symbol.asyncIterator]()
+    await nextFrame(iterator)
+
+    const created = await controller.createProject({ title: 'Product' })
+    const projectId = created.project.projectId
+    await expect(nextFrame(iterator)).resolves.toMatchObject({
+      type: 'projects',
+      projects: [{ projectId, title: 'Product', workspaceIds: [] }],
+    })
+
+    const workspaceId = (await controller.create({ path: stageDir(root, 'alpha') })).workspace.workspaceId
+    await nextFrame(iterator)
+    await nextFrame(iterator)
+    await controller.assignWorkspaceProject({ workspaceId, projectId })
+    await expect(nextFrame(iterator)).resolves.toMatchObject({
+      type: 'projects', projects: [{ projectId, workspaceIds: [workspaceId] }],
+    })
+
+    // Renaming to the current title writes nothing, so the next frame is the
+    // following write's complete list, not a duplicate of this one.
+    await expect(controller.renameProject({ projectId, title: 'Product' }))
+      .resolves.toMatchObject({ project: { title: 'Product' } })
+    const second = await controller.createProject({ title: 'Second' })
+    await expect(nextFrame(iterator)).resolves.toMatchObject({
+      type: 'projects',
+      projects: [
+        { projectId: second.project.projectId, workspaceIds: [] },
+        { projectId, workspaceIds: [workspaceId] },
+      ],
+    })
+
+    await controller.deleteProject({ projectId })
+    await expect(nextFrame(iterator)).resolves.toMatchObject({
+      type: 'projects', projects: [{ projectId: second.project.projectId }],
+    })
+
+    abort.abort()
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it('shows a non-owner only the Projects and member Workspaces it may follow', async () => {
+    const { controller, ctx, root } = await harness()
+    const shown = (await controller.create({ path: stageDir(root, 'shown') })).workspace.workspaceId
+    const hidden = (await controller.create({ path: stageDir(root, 'hidden') })).workspace.workspaceId
+    const projectId = (await controller.createProject({ title: 'grouped' })).project.projectId
+    await controller.assignWorkspaceProject({ workspaceId: shown, projectId })
+    await controller.assignWorkspaceProject({ workspaceId: hidden, projectId })
+    ctx.remoteAccess.registerPolicy('test-guest', {
+      bindings: () => [
+        { role: FOLLOWER, resource: { kind: 'global' } },
+        { role: WORKSPACE_VIEWER, resource: { kind: 'workspace', id: shown } },
+      ],
+    })
+    const abort = new AbortController()
+    const iterator = followerContext(ctx, { kind: 'test-guest', guest: 'projects' })
+      .workspaceController.follow(abort.signal)[Symbol.asyncIterator]()
+    await expect(nextFrame(iterator)).resolves.toMatchObject({
+      type: 'baseline',
+      value: { projects: [{ projectId, workspaceIds: [shown] }] },
+    })
+
+    await controller.renameProject({ projectId, title: 'renamed' })
+    await expect(nextFrame(iterator)).resolves.toMatchObject({
+      type: 'projects', projects: [{ title: 'renamed', workspaceIds: [shown] }],
+    })
+
+    abort.abort()
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
   it('follows only the Workspaces and Sessions a non-owner may follow', async () => {
     const { controller, ctx, root } = await harness()
     // oxlint-disable-next-line typescript/unbound-method -- the assertion inspects the spy and never calls it.
@@ -477,6 +645,7 @@ describe('WorkspaceController follow', () => {
         items: [expect.objectContaining({ workspaceId: shownId, sessionIds: [shared.id] })],
         archivedSessionIds: [],
         pinnedSessionIds: [shared.id],
+        projects: [],
       },
     })
 
@@ -565,6 +734,16 @@ describe('WorkspaceController follow', () => {
     })
     ctx.emit('domain/changed', {
       domain: 'workspace', table: 'workspaces', key: 'unknown', operation: 'deleted',
+    })
+    ctx.emit('domain/changed', {
+      domain: 'project', table: 'other', key: 'x', operation: 'put', value: {},
+    })
+    ctx.emit('domain/changed', {
+      domain: 'project', table: '', key: '', operation: 'deleted',
+    })
+    // The committed list matches the projection already delivered, so no frame.
+    ctx.emit('domain/changed', {
+      domain: 'project', table: '', key: '', operation: 'put', value: { projects: [] },
     })
     const pending = iterator.next()
     const created = await controller.create({ path: stageDir(root, 'visible') })

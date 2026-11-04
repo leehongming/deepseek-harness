@@ -3,80 +3,83 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/workspace/workspace/README.md
 /:
-  en: d112c03aefc9a73d
-  zh: e2ea3f0a9c814a23
+  en: 3b4d8e60708312e6
+  zh: 11c5bf91a0f85832
 /deepseek-ai-dsh-workspace:
   en: 7a12adba4e7766e3
   zh: f6d5c8374f4512c8
 /deepseek-ai-dsh-workspace/summary:
-  en: 30aea62cabd8e8a8
-  zh: b22b30ef08fd4713
+  en: eacfbd475f4e6ce5
+  zh: c5a033aa49d17f12
 /deepseek-ai-dsh-workspace/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
 /deepseek-ai-dsh-workspace/use-this-package:
-  en: 37d744451570942e
-  zh: 7f8200725a1cca54
+  en: 13614877b51b9030
+  zh: d1ae6f9080fa81c1
 /deepseek-ai-dsh-workspace/use-this-package/when-to-use-it:
-  en: f24dd905d5bcac3e
-  zh: 16b91b99fdaf5add
+  en: 8fc67ba0e5eaefd1
+  zh: 750cd18b959b8ffe
 /deepseek-ai-dsh-workspace/use-this-package/setting-up:
-  en: f4611634be527eb0
-  zh: 89d35d640a2c1cc4
-/deepseek-ai-dsh-workspace/use-this-package/creating-and-ordering-projects:
-  en: a092fc7b0db9c299
-  zh: 6d7ed93e34237773
+  en: c4f73046bd0fb82b
+  zh: b5a494f7f6576740
+/deepseek-ai-dsh-workspace/use-this-package/creating-and-ordering-workspaces:
+  en: 465e395df32d699f
+  zh: 51045de9a99edc40
+/deepseek-ai-dsh-workspace/use-this-package/grouping-workspaces-into-projects:
+  en: c65fc0a7c707dff3
+  zh: 5d3dafe971cc6ca8
 /deepseek-ai-dsh-workspace/use-this-package/first-use-workspace:
-  en: 217475057b6506ed
-  zh: be2312a29499c203
-/deepseek-ai-dsh-workspace/use-this-package/grouping-sessions-under-a-project:
-  en: 5a68da22516a6a3c
-  zh: a229d57acdab882c
-/deepseek-ai-dsh-workspace/use-this-package/hiding-and-restoring-sessions-and-removing-projects:
-  en: 7b298aa5c48501d4
-  zh: 8ffeec728c1c13fe
+  en: da9d9021f06de700
+  zh: 1212515d8bd3c18d
+/deepseek-ai-dsh-workspace/use-this-package/grouping-sessions-under-a-workspace:
+  en: 95af33e596778f13
+  zh: 55617aa58eb8ee3b
+/deepseek-ai-dsh-workspace/use-this-package/hiding-and-restoring-sessions-and-removing-workspaces:
+  en: 6d41c5ac1d0b15dc
+  zh: c59fce557d42c8da
 /deepseek-ai-dsh-workspace/understand-the-implementation:
   en: 447ced401b3b14a8
   zh: 3ce2105605223945
 /deepseek-ai-dsh-workspace/understand-the-implementation/design-philosophy:
-  en: e969314497b99389
-  zh: 82eafc832617a1eb
+  en: 4b611c694e49933b
+  zh: 71404deb30284274
 /deepseek-ai-dsh-workspace/understand-the-implementation/api-behavior:
-  en: 69327adb9ea52680
-  zh: fa32eea5019c7abb
+  en: d72941ab68331a48
+  zh: 8cbe2c16c9244f1f
 /deepseek-ai-dsh-workspace/understand-the-implementation/source-map:
-  en: 6899c50041c3d1ef
-  zh: ea70fda89cc50465
+  en: 534412aa4c3e995d
+  zh: 1f8d9a9ee41cd149
 /deepseek-ai-dsh-workspace/understand-the-implementation/durable-shape:
-  en: 056a266f4a15b29d
-  zh: e1589f5750662887
+  en: b1dca76b4abca914
+  zh: ad8d5bd0780303d0
 /deepseek-ai-dsh-workspace/understand-the-implementation/lifecycle:
-  en: e41db10d48acbf9a
-  zh: 457d329fe37ba33c
+  en: 8db24e9fe3a103c6
+  zh: f596badb590ff644
 /deepseek-ai-dsh-workspace/understand-the-implementation/failure-and-recovery:
-  en: 8b53b9369bea6f67
-  zh: 612fd3439a23e035
+  en: 52482d208b03ed58
+  zh: 18445d4580e354e7
 /deepseek-ai-dsh-workspace/further-exploration:
-  en: 642397907af144b3
-  zh: 2b35c1a6237db0c0
+  en: aa837d8776545633
+  zh: 896b837a5a8fddb6
 /deepseek-ai-dsh-workspace/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
-/deepseek-ai-dsh-workspace/model-experience/workspace-records-and-session-accounts:
-  en: c5c7dfdfe3cea27f
-  zh: 6e75bd1afacba4c4
-/deepseek-ai-dsh-workspace/model-experience/workspace-records-and-session-accounts/what-the-model-sees:
-  en: ab7deb3130db939e
-  zh: b717a7fc60146cd3
-/deepseek-ai-dsh-workspace/model-experience/workspace-records-and-session-accounts/token-effect:
+/deepseek-ai-dsh-workspace/model-experience/workspace-and-project-records-and-session-accounts:
+  en: e27d969996678985
+  zh: 49ed9d6b76d619dc
+/deepseek-ai-dsh-workspace/model-experience/workspace-and-project-records-and-session-accounts/what-the-model-sees:
+  en: 815a43d618de69ab
+  zh: 8d9eb412cb844fb4
+/deepseek-ai-dsh-workspace/model-experience/workspace-and-project-records-and-session-accounts/token-effect:
   en: 5b83ac7ce1ea1346
   zh: dc56664cd257ab8e
-/deepseek-ai-dsh-workspace/model-experience/workspace-records-and-session-accounts/kv-cache-effect:
+/deepseek-ai-dsh-workspace/model-experience/workspace-and-project-records-and-session-accounts/kv-cache-effect:
   en: 524afbded27fb06b
   zh: 9dcf8539495e9c68
 /deepseek-ai-dsh-workspace/known-limitations-and-deferred-work:
-  en: 1a9c71a3dbfc4506
-  zh: 87b57414053f4d00
+  en: a27bb13e47864ca8
+  zh: acb951d9a9c8d285
 /deepseek-ai-dsh-workspace/known-limitations-and-deferred-work/dev-note:
   en: ac1d08360a93382b
   zh: 6c58749bae9a6e65

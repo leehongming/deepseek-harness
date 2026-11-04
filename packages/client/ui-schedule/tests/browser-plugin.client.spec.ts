@@ -111,7 +111,7 @@ async function baseContext(
     ids: [id], byId: { [id]: { id, displayTitle: id, running: false, blank: false, updatedAt: 0, retainedBy: {} } },
     phase: 'ready', projectionsBySession: {},
   }
-  const workspaces: WorkspaceSnapshot = { items: [], archivedSessionIds: [], pinnedSessionIds: [], state: 'idle', phase: 'ready', error: null }
+  const workspaces: WorkspaceSnapshot = { items: [], archivedSessionIds: [], pinnedSessionIds: [], projects: [], state: 'idle', phase: 'ready', error: null }
   ctx.provide('sessions', {
     list: { getSnapshot: () => sessions, subscribe: () => () => {} },
     binding: () => undefined,

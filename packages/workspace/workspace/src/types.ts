@@ -1,7 +1,8 @@
 /**
- * Public type vocabulary of the workspace entity: the `WorkspaceId` brand and
- * the `Workspace` consumer interface. Types only — the `WorkspaceId` factory
- * lives in `index.ts` (this file carries no runtime code).
+ * Public type vocabulary of the workspace entity: the `WorkspaceId` and
+ * `ProjectId` brands plus the `Workspace` and `Project` consumer interfaces.
+ * Types only — the id factories live in `index.ts` (this file carries no
+ * runtime code).
  * @module @deepseek-ai/dsh-workspace/src/types
  */
 
@@ -14,6 +15,13 @@ import type { TypertResource } from '@deepseek-ai/dsh-typert-protocol'
  * normalization rewrites paths, and a reference anchor must stay stable.
  */
 export type WorkspaceId = Branded<'WorkspaceId'>
+
+/**
+ * Identifies one project record: the user-managed grouping a Workspace may
+ * belong to. A generated uuid, like {@link WorkspaceId}, so a rename never
+ * changes the reference anchor.
+ */
+export type ProjectId = Branded<'ProjectId'>
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertResourceMap {
@@ -150,4 +158,32 @@ export interface Workspace {
    * @returns `'ok'` when the directory exists, `'missing-dir'` otherwise.
    */
   status(): Promise<'ok' | 'missing-dir'>
+}
+
+/**
+ * One project: a durable, user-managed grouping above Workspaces. A Workspace
+ * belongs to at most one project, a relation the registry enforces across the
+ * complete project set on its write chain; Workspaces outside every project
+ * are ungrouped. Membership changes never move, rename, or delete a Workspace
+ * or any Session.
+ */
+export interface Project {
+  /** Stable record id (generated uuid). */
+  readonly id: ProjectId
+
+  /** Display title; unique across projects at the durable boundary. */
+  readonly title: string
+
+  /**
+   * Member Workspaces in project order. Ids whose Workspace registration was
+   * deleted are filtered from this projection; a later project mutation prunes
+   * them from the record.
+   */
+  readonly workspaceIds: readonly WorkspaceId[]
+
+  /** ISO-8601 creation instant, stamped at create and never rewritten. */
+  readonly createdAt: string
+
+  /** ISO-8601 instant of the last durable mutation (create counts as one). */
+  readonly updatedAt: string
 }
