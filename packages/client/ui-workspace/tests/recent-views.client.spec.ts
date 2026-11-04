@@ -21,7 +21,7 @@ function bench(ids: readonly SessionId[], limit = 10) {
     ids: [...ids], byId: Object.fromEntries(ids.map(id => [id, row(id)])), phase: 'ready', projectionsBySession: {},
   })
   const workspaces = createSnapshotStore<WorkspaceSnapshot>({
-    items: [], archivedSessionIds: [], pinnedSessionIds: [], phase: 'ready', state: 'idle', error: null,
+    items: [], projects: [], archivedSessionIds: [], pinnedSessionIds: [], phase: 'ready', state: 'idle', error: null,
   })
   const held = new Map<SessionId, number>()
   // The Session Controller publishes the list synchronously inside retain; navigation reconciles from it.

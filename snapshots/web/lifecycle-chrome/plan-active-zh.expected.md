@@ -6,10 +6,11 @@
   - button "自动化任务"
   - button "从侧边栏取消固定自动化任务"
   - button "更多"
-- text: 工作区
+- text: 项目
 - button "搜索会话"
 - textbox "搜索会话名称"
 - button "视图选项"
+- button "新建项目"
 - button "添加工作区"
 - tree "会话":
   - treeitem "workspace" [expanded]

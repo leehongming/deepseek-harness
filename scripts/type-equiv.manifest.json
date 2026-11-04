@@ -1945,6 +1945,16 @@
     },
     {
       "doc": "docs/subsystems/workspace.md",
+      "symbol": "ProjectId",
+      "source": "packages/workspace/workspace/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/workspace.md",
+      "symbol": "Project",
+      "source": "packages/workspace/workspace/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/workspace.md",
       "symbol": "SessionActivityKindMap",
       "source": "packages/workspace/workspace/src/types.ts"
     },

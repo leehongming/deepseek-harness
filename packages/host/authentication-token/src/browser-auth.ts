@@ -73,7 +73,12 @@ function decodeBase64Url(value: string): Buffer | undefined {
 function processLaunchToken(owner: object): string {
   const existing = PROCESS_LAUNCH_TOKENS.get(owner)
   if (existing !== undefined) return existing
-  const created = encodeBase64Url(randomBytes(SECRET_BYTES))
+  // Local deployment override: pin the launch token so a restarted `dsh web`
+  // keeps serving the same authenticated URL. Unset keeps the generated token.
+  const pinned = process.env.DSH_WEB_LAUNCH_TOKEN
+  const created = pinned === undefined || pinned === ''
+    ? encodeBase64Url(randomBytes(SECRET_BYTES))
+    : pinned
   PROCESS_LAUNCH_TOKENS.set(owner, created)
   return created
 }

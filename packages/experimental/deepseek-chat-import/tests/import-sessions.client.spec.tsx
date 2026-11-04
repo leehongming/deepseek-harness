@@ -29,7 +29,7 @@ const view = (id: string, title: string, sessionIds: SessionId[]) => ({
 })
 const workspaces: WorkspaceSnapshot = {
   items: [view('w1', 'project-one', [sid('s-current')]), view('w2', 'project-two', [])],
-  archivedSessionIds: [], pinnedSessionIds: [], state: 'idle', phase: 'ready', error: null,
+  projects: [], archivedSessionIds: [], pinnedSessionIds: [], state: 'idle', phase: 'ready', error: null,
 }
 
 function sessions(current: string): SessionListState {

@@ -1,4 +1,8 @@
-import { IconEditOutlineRegular, IconTrashOutlineRegular, IconPinFillRegular, IconPinOutlineRegular, IconUnarchiveOutlineRegular, IconArchiveOutlineRegular, IconBranchOutlineRegular, IconCopyOutlineRegular, IconMailReadOutlineRegular, IconMailUnreadOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  IconArchiveOutlineRegular, IconBranchOutlineRegular, IconCheckOutlineRegular, IconCopyOutlineRegular,
+  IconEditOutlineRegular, IconFolderOpenOutlineRegular, IconMailReadOutlineRegular, IconMailUnreadOutlineRegular,
+  IconPinFillRegular, IconPinOutlineRegular, IconTrashOutlineRegular, IconUnarchiveOutlineRegular,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import { SessionMenu } from './session-actions/SessionMenu.tsx'
 import type {} from '@deepseek-ai/dsh-client-ui-context-menu/client'
 /**
@@ -25,7 +29,7 @@ import type { WorkspaceNavigationConfig } from '../types.ts'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ISessions, SessionForkError } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {
-  IWorkspaces, SessionActivity, WorkspaceArchiveError, WorkspaceId, WorkspaceSnapshot,
+  IWorkspaces, ProjectId, SessionActivity, WorkspaceArchiveError, WorkspaceId, WorkspaceSnapshot,
 } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { RemoteEndpoint } from '@deepseek-ai/dsh-api-remote-access/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -49,6 +53,7 @@ import {
   type SessionArchiveConfirmInjected, type SessionArchiveConfirmRequest,
   type RenameSessionInjected, type RowToast, type RowToastInjected, type RowToastState, type SessionRenameDialogInjected,
   type WorkspaceActionRequest, type SessionIdInjected, type WorkspaceBrowserInjected, type WorkspacePickerInjected,
+  type ProjectActionRequest,
 } from './contract/slots.ts'
 import { createWorkspaceShortcutControls, installWorkspaceShortcuts } from './shortcuts.ts'
 import { UiWorkspaceService } from './navigation.ts'
@@ -327,6 +332,17 @@ export function apply(ctx: Context, config: SyncedConfig<WorkspaceNavigationConf
     if (workspace === undefined || !ctx.remoteAccess.source('workspace', workspaceId, `workspace/${action}`).getSnapshot()) return
     workspaceActionRequest.set({ action, workspaceId, displayTitle, storedTitle: workspace.title })
   }
+  // Projects are owner-only Host records, so their actions carry no
+  // Workspace-resource access check: the Host remains the authority.
+  const projectActionRequest = createSnapshotStore<ProjectActionRequest | null>(null)
+  const requestProjectAction = (projectId: ProjectId, action: 'rename' | 'delete'): void => {
+    const project = workspaces.list.getSnapshot().projects.find(row => row.projectId === projectId)
+    if (project === undefined) return
+    projectActionRequest.set({
+      action, projectId, title: project.title, workspaceCount: project.workspaceIds.length,
+    })
+  }
+  const projectLabel = ctx.locale.bind(NS)
   ctx.slots.inject('contextMenu.icon', function* () {
     for (const [key, Icon] of Object.entries({
       'workspace.rename': IconEditOutlineRegular, 'workspace.delete': IconTrashOutlineRegular,
@@ -334,6 +350,9 @@ export function apply(ctx: Context, config: SyncedConfig<WorkspaceNavigationConf
       'workspace.archive': IconArchiveOutlineRegular, 'workspace.unarchive': IconUnarchiveOutlineRegular,
       'workspace.fork': IconBranchOutlineRegular, 'workspace.copy': IconCopyOutlineRegular,
       'workspace.markRead': IconMailReadOutlineRegular, 'workspace.markUnread': IconMailUnreadOutlineRegular,
+      // Project rows reuse the Workspace rename/delete glyphs; the outline
+      // folder marks the grouping level and the check marks current membership.
+      'workspace.project': IconFolderOpenOutlineRegular, 'workspace.projectCurrent': IconCheckOutlineRegular,
     })) yield ctx.slots.register({ name: 'contextMenu.icon', key }, Icon)
   })
   ctx.effect(() => ctx.contextMenus.register({
@@ -347,8 +366,65 @@ export function apply(ctx: Context, config: SyncedConfig<WorkspaceNavigationConf
       ? [{ id: 'delete', label: ctx.locale.bind(NS)('delete.workspace'), icon: { key: 'workspace.delete' }, danger: true, separatorBefore: true,
         run: () => { requestWorkspaceAction(workspaceId, displayTitle, 'delete') } }] : [],
   }), 'workspace: delete menu action')
+  ctx.effect(() => ctx.contextMenus.register({
+    id: 'project.rename', target: 'project', order: 100,
+    resolve: ({ projectId }) => [{
+      id: 'rename', label: projectLabel('rename'), icon: { key: 'workspace.rename' },
+      run: () => { requestProjectAction(projectId, 'rename') },
+    }],
+  }), 'project: rename menu action')
+  ctx.effect(() => ctx.contextMenus.register({
+    id: 'project.delete', target: 'project', order: 300,
+    resolve: ({ projectId }) => [{
+      id: 'delete', label: projectLabel('project.delete'), icon: { key: 'workspace.delete' }, danger: true, separatorBefore: true,
+      run: () => { requestProjectAction(projectId, 'delete') },
+    }],
+  }), 'project: delete menu action')
+  // Membership is one Workspace relation, so the whole move gesture — including
+  // the unchanged option — lives in the Workspace menu. The current project is
+  // marked by a leading check; menu actions carry no selected flag.
+  ctx.effect(() => ctx.contextMenus.register({
+    id: 'workspace.moveToProject', target: 'workspace', order: 250,
+    observe: () => [workspaces.list],
+    resolve: ({ workspaceId }) => {
+      // Moving a Workspace is a Workspace-scoped mutation: a Peer that may not
+      // reorder or rename it may not regroup it either.
+      if (!ctx.remoteAccess.source('workspace', workspaceId, 'workspace/assignWorkspaceProject').getSnapshot()) return []
+      const snapshot = workspaces.list.getSnapshot()
+      // With no projects there is nowhere to move a Workspace: the project view
+      // is still the plain Workspace list.
+      if (snapshot.projects.length === 0) return []
+      const current = snapshot.projects
+        .find(project => project.workspaceIds.includes(workspaceId))?.projectId
+      const move = (projectId?: ProjectId): Promise<void> => workspaces.assignWorkspaceProject(workspaceId, projectId)
+      const checked = { icon: { key: 'workspace.projectCurrent' } }
+      const failureLabel = projectLabel('project.moveFailed')
+      return [{
+        id: 'move-to-project', label: projectLabel('project.moveTo'), icon: { key: 'workspace.project' }, failureLabel,
+        children: [
+          {
+            id: 'unassigned', label: projectLabel('project.ungrouped'),
+            ...(current === undefined ? checked : {}),
+            failureLabel,
+            run: () => move(),
+          },
+          ...snapshot.projects.map(project => ({
+            id: `project:${project.projectId}`, label: project.title,
+            ...(current === project.projectId ? checked : {}),
+            failureLabel,
+            run: () => move(project.projectId),
+          })),
+        ],
+      }]
+    },
+  }), 'workspace: move to project menu action')
   const browserInjected = (): WorkspaceBrowserInjected => ({
     settleWorkspaceAction: () => { workspaceActionRequest.set(null) },
+    requestProjectCreate: () => { projectActionRequest.set({ action: 'create' }) },
+    settleProjectAction: () => { projectActionRequest.set(null) },
+    createProject: async (title) => { await workspaces.createProject(title) },
+    renameProject: async (projectId, title) => { await workspaces.renameProject(projectId, title) },
+    deleteProject: async (projectId) => { await workspaces.deleteProject(projectId) },
     // Explicit group actions keep their target; unscoped New Session inherits
     // the current Session Workspace before the recent-Workspace fallback.
     startSession: (workspaceId, options) => { uiWorkspace.startSession(workspaceId, options) },
@@ -368,7 +444,8 @@ export function apply(ctx: Context, config: SyncedConfig<WorkspaceNavigationConf
     requestAddWorkspace: shortcutControls.add,
     closeAddWorkspace: shortcutControls.closeAdd,
     setDirectoryBusy: shortcutControls.directoryBusy,
-    hooks: { workspaceActionRequest, contextMenuTarget: ctx.contextMenus.active, directoryFlow: browserFlowSource, hostInfo,
+    hooks: { workspaceActionRequest, projectActionRequest, contextMenuTarget: ctx.contextMenus.active,
+      directoryFlow: browserFlowSource, hostInfo,
       workspaceShortcuts: shortcutControls.state, shortcuts: ctx.shortcuts.catalog },
   })
   const pickerInjected = (directoryFlow: HostObservable<boolean>) => (): WorkspacePickerInjected => ({

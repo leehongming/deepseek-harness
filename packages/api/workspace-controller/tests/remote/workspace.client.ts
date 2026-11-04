@@ -8,6 +8,16 @@
 import { ok, type RemoteTable, type StreamScript } from '@deepseek-ai/dsh-remote-mock'
 import type { RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type {
+  ProjectAssignWorkspaceRequest,
+  ProjectCreateRequest,
+  ProjectCreateValue,
+  ProjectDeleteRequest,
+  ProjectDeleteValue,
+  ProjectId,
+  ProjectListValue,
+  ProjectRenameRequest,
+  ProjectValue,
+  ProjectView,
   WorkspaceArchiveSessionRequest,
   WorkspaceArchiveValue,
   WorkspaceCreateRequest,
@@ -62,14 +72,42 @@ export function workspace(id: string, overrides: Partial<WorkspaceView> = {}): W
 }
 
 /**
- * A baseline frame holding the named Workspaces and no archived or pinned Sessions.
+ * One Project row whose id doubles as its title.
+ * @param id - Project id.
+ * @param workspaceIds - member Workspace ids in project order.
+ * @param overrides - fields replacing the derived ones.
+ * @returns the row.
+ */
+export function project(
+  id: string,
+  workspaceIds: readonly WorkspaceId[] = [],
+  overrides: Partial<ProjectView> = {},
+): ProjectView {
+  return {
+    projectId: id as ProjectId,
+    title: id,
+    workspaceIds,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/**
+ * A baseline frame holding the named Workspaces, no archived or pinned
+ * Sessions, and no Projects.
  * @param ids - Workspace ids in registry order.
  * @returns the frame.
  */
 export function baseline(...ids: readonly string[]): WorkspaceBaselineFrame {
   return {
     type: 'baseline',
-    value: { items: ids.map(id => workspace(id)), archivedSessionIds: [], pinnedSessionIds: [] },
+    value: {
+      items: ids.map(id => workspace(id)),
+      archivedSessionIds: [],
+      pinnedSessionIds: [],
+      projects: [],
+    },
   }
 }
 
@@ -107,5 +145,15 @@ export const workspaceWorld: RemoteTable = {
     'workspace/unarchiveSession': (_request: WorkspaceUnarchiveSessionRequest): RemoteResult<WorkspaceArchiveValue> => ok({ archivedSessionIds: [] }),
     'workspace/pinSession': (request: WorkspacePinSessionRequest): RemoteResult<WorkspacePinValue> => ok({ pinnedSessionIds: [request.sessionId] }),
     'workspace/unpinSession': (_request: WorkspaceUnpinSessionRequest): RemoteResult<WorkspacePinValue> => ok({ pinnedSessionIds: [] }),
+    'workspace/createProject': (request: ProjectCreateRequest): RemoteResult<ProjectCreateValue> => ok({
+      project: project(request.title, [], { title: request.title }),
+    }),
+    'workspace/renameProject': (request: ProjectRenameRequest): RemoteResult<ProjectValue> => ok({
+      project: project(String(request.projectId), [], { title: request.title }),
+    }),
+    'workspace/deleteProject': (_request: ProjectDeleteRequest): RemoteResult<ProjectDeleteValue> => ok({ deleted: true }),
+    'workspace/assignWorkspaceProject': (request: ProjectAssignWorkspaceRequest): RemoteResult<ProjectListValue> => ok({
+      projects: [project(String(request.projectId ?? 'assigned'), [request.workspaceId])],
+    }),
   },
 }

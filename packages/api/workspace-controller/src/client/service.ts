@@ -4,7 +4,7 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { RemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
-import type { WorkspaceView } from '../types.ts'
+import type { ProjectId, ProjectView, WorkspaceView } from '../types.ts'
 import type { ClientWorkspaceModel, WorkspaceSnapshot } from './model.ts'
 
 /** Structured create failure for callers that distinguish Host business errors. */
@@ -45,7 +45,7 @@ export interface WorkspaceSource {
 
 /** Workspace Controller's Client service face. */
 export interface IWorkspaces {
-  /** Host-authoritative Workspace rows, order, archive set, and follow lifecycle. */
+  /** Host-authoritative Workspace rows, order, archive set, Project list, and follow lifecycle. */
   readonly list: WorkspaceSource
   /**
    * Register an existing path as a Workspace.
@@ -112,6 +112,30 @@ export interface IWorkspaces {
     sessionId: SessionId,
     beforeSessionId?: SessionId,
   ): Promise<WorkspaceView>
+  /**
+   * Create a Project grouping above Workspaces.
+   * @param title - unique non-blank Project title.
+   * @returns the created Project.
+   */
+  createProject(title: string): Promise<ProjectView>
+  /**
+   * Rename a Project.
+   * @param projectId - target Project.
+   * @param title - unique non-blank new title.
+   * @returns the renamed Project.
+   */
+  renameProject(projectId: ProjectId, title: string): Promise<ProjectView>
+  /**
+   * Delete a Project. Its member Workspaces become ungrouped and are kept.
+   * @param projectId - target Project.
+   */
+  deleteProject(projectId: ProjectId): Promise<void>
+  /**
+   * Move a Workspace into a Project, or out of every Project when `projectId` is omitted.
+   * @param workspaceId - Workspace whose membership changes.
+   * @param projectId - target Project; omitted ungroups the Workspace.
+   */
+  assignWorkspaceProject(workspaceId: WorkspaceId, projectId?: ProjectId): Promise<void>
 }
 
 /** Owns the bare Workspace snapshot and Workspace-only commands. */
@@ -183,6 +207,28 @@ export class WorkspaceController extends Service implements IWorkspaces {
     const result = await this.model.insertSessionBefore(workspaceId, sessionId, beforeSessionId)
     if (!result.ok) throw commandError('move', result.error)
     return result.value.workspace
+  }
+
+  async createProject(title: string): Promise<ProjectView> {
+    const result = await this.model.createProject(title)
+    if (!result.ok) throw commandError('project create', result.error)
+    return result.value.project
+  }
+
+  async renameProject(projectId: ProjectId, title: string): Promise<ProjectView> {
+    const result = await this.model.renameProject(projectId, title)
+    if (!result.ok) throw commandError('project rename', result.error)
+    return result.value.project
+  }
+
+  async deleteProject(projectId: ProjectId): Promise<void> {
+    const result = await this.model.deleteProject(projectId)
+    if (!result.ok) throw commandError('project delete', result.error)
+  }
+
+  async assignWorkspaceProject(workspaceId: WorkspaceId, projectId?: ProjectId): Promise<void> {
+    const result = await this.model.assignWorkspaceProject(workspaceId, projectId)
+    if (!result.ok) throw commandError('project assign', result.error)
   }
 }
 

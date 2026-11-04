@@ -3,23 +3,23 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/workspace/README.md
 /:
-  en: 79b8272a8456d63f
-  zh: f3882bd5e142ef5c
+  en: 256e30acfb942e71
+  zh: 136aaae48d492b8d
 /packages-workspace:
   en: 18277b1abbfdb875
   zh: 81bc5f86ae94de79
 /packages-workspace/summary:
-  en: 0a47673229612c3d
-  zh: a57b8789d68c85f6
+  en: 887d7bc2ca3370fd
+  zh: b455d46e974a40bf
 /packages-workspace/table-of-contents:
   en: 1eb35b015a6c423f
   zh: a8a3dceee2c9e943
 /packages-workspace/packages:
-  en: 35dfc3e7873380fa
-  zh: fa48b9976a592a27
+  en: 4eb95b77b4e1d48e
+  zh: 17cc5ecab89bb5da
 /packages-workspace/related-documentation:
-  en: ee767482298fec85
-  zh: 3cb8324a9eccc5a6
+  en: 72748cfbf6e2c80d
+  zh: 21c5ac261faf4f83
 /packages-workspace/dev-note:
   en: 5de1d6304e00c58f
   zh: 8d8225361cfa29e5

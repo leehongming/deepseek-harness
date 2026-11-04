@@ -41,16 +41,24 @@ interface CodexPackageManifest {
   }
 }
 
-const codexPackageJsonPath = createRequire(import.meta.url).resolve('@openai/codex/package.json')
-const codexPackageManifest = JSON.parse(
-  readFileSync(codexPackageJsonPath, 'utf8'),
-) as CodexPackageManifest
-
-/** Absolute package-local JavaScript wrapper selected by the package manifest. */
-const CODEX_PACKAGE_BIN = resolve(
-  dirname(codexPackageJsonPath),
-  codexPackageManifest.bin.codex,
-)
+/**
+ * Resolve the package-local official Codex wrapper on demand, so a deployment
+ * that selects its own Codex-compatible executable never needs
+ * `@openai/codex` installed for this module to load.
+ * @returns Node, the official wrapper, and the fixed app-server arguments.
+ */
+function packageLocalAppServerArgv(): string[] {
+  const packageJsonPath = createRequire(import.meta.url).resolve('@openai/codex/package.json')
+  const manifest = JSON.parse(
+    readFileSync(packageJsonPath, 'utf8'),
+  ) as CodexPackageManifest
+  return [
+    process.execPath,
+    resolve(dirname(packageJsonPath), manifest.bin.codex),
+    'app-server',
+    '--stdio',
+  ]
+}
 
 /** Profile-selectable non-interactive Codex permission mode. */
 export type CodexPermissionMode =
@@ -129,11 +137,15 @@ export function codexStartupFailure(cause: unknown): Error {
 }
 
 /**
- * Fixed package-local app-server command, independent of the host `PATH`.
- * @returns Node, the official wrapper, and the fixed app-server arguments.
+ * Fixed app-server command, independent of the host `PATH`.
+ * @param executable - deployment-selected Codex-compatible CLI; omitted to use
+ * the package-local official wrapper.
+ * @returns the executable and the fixed app-server arguments.
  */
-export function codexAppServerArgv(): string[] {
-  return [process.execPath, CODEX_PACKAGE_BIN, 'app-server', '--stdio']
+export function codexAppServerArgv(executable?: string): string[] {
+  return executable === undefined
+    ? packageLocalAppServerArgv()
+    : [executable, 'app-server', '--stdio']
 }
 
 /** Fully resolved inputs for one Codex app-server run. */
@@ -142,6 +154,11 @@ export interface CodexRunSpec {
   readonly cwd: string
   /** Profile-selected native model; omitted to preserve Codex settings. */
   readonly model?: string
+  /**
+   * Deployment-selected Codex-compatible executable; omitted to use the
+   * package-local official wrapper.
+   */
+  readonly executable?: string
   /** Profile-selected native non-interactive permission mode. */
   readonly permissionMode: CodexPermissionMode
   /** Explicit deployment/test environment layered after the shared scrub. */
@@ -234,7 +251,7 @@ export async function startCodexRun(
   let child: SubprocessHandle
   try {
     child = spec.spawn({
-      argv: codexAppServerArgv(),
+      argv: codexAppServerArgv(spec.executable),
       cwd: spec.cwd,
       stdio: { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' },
       graceMs: spec.disposeGraceMs,

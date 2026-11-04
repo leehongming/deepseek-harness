@@ -1,6 +1,7 @@
 /**
  * Workspace browser tree row components (figma Cell set 14:3080): pure presentational —
- * all data and callbacks arrive via props. Hover swaps (folder->chevron,
+ * all data and callbacks arrive via props. Project headers sit one level above
+ * the Workspace headers and reuse their row metrics. Hover swaps (folder->chevron,
  * time->ellipsis, action buttons) are CSS-only, and a session row's clipped
  * title marquees while the row is hovered or its menu is open. Workspace row
  * menus share captured Workspace actions with right-click. Both row types
@@ -14,7 +15,7 @@ import clsx from 'clsx'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   HoverCard, IconArchiveOutlineRegular, MarqueeText,
-  IconFolderCloseRegular, IconFolderOpenRegular,
+  IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconFolderOpenRegular,
   IconNewChatOutlineRegular, IconPinFillRegular,
   IconTriangleRightFillRegular, IconUnarchiveOutlineRegular, relativeTime, StateDot, Tooltip, useHoverMarquee, useRowDragPreview,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -23,7 +24,7 @@ import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import { abbreviateHomePath } from '@deepseek-ai/dsh-util-workspace-path'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionDragType, WorkspaceBrowserProps } from '../contract/slots.ts'
-import type { GroupNode, SearchResultNode, SessionNode } from '../tree.ts'
+import type { GroupNode, ProjectNode, SearchResultNode, SessionNode } from '../tree.ts'
 import css from './Rows.module.css'
 
 /** Sidebar-owned layout values needed by row copies mounted outside the sidebar. */
@@ -132,7 +133,7 @@ function rowHalf(e: { clientY: number; currentTarget: HTMLElement }): 'before' |
 }
 
 /** Owner props of one Workspace header row; the access Hooks are the browser root's own standard seats. */
-type ProjectRowItemProps = {
+type WorkspaceHeaderRowItemProps = {
   group: GroupNode
   newShortcut?: ShortcutCatalogEntry | undefined
   containsCurrentDescendant?: boolean
@@ -152,7 +153,7 @@ interface ProjectRowActions {
 }
 
 /**
- * Project (workspace) header row: folder + title;
+ * Workspace header row: folder + title;
  * hover reveals the chevron and, on a real Workspace, the create button;
  * dwelling on a real Workspace shows its hover card. The ungrouped bucket
  * has neither, because it has no backing Workspace to start a Session in.
@@ -168,33 +169,33 @@ interface ProjectRowActions {
  * @param props.t - the browser root's locale seat.
  * @returns the row element.
  */
-export function ProjectRowItem(props: ProjectRowItemProps) {
+export function WorkspaceHeaderRowItem(props: WorkspaceHeaderRowItemProps) {
   const workspaceId = props.group.workspaceId
   return workspaceId === undefined
-    ? <UngroupedProjectRow {...props} />
-    : <WorkspaceProjectRow {...props} workspaceId={workspaceId} />
+    ? <UngroupedWorkspaceHeaderRowItem {...props} />
+    : <WorkspaceResourceHeaderRowItem {...props} workspaceId={workspaceId} />
 }
 
 /** The ungrouped bucket's header: no backing Workspace to start a Session in or reorder. */
-function UngroupedProjectRow(props: ProjectRowItemProps) {
-  return <ProjectRow {...props} actions={{ reorder: false }} />
+function UngroupedWorkspaceHeaderRowItem(props: WorkspaceHeaderRowItemProps) {
+  return <WorkspaceHeaderRow {...props} actions={{ reorder: false }} />
 }
 
 /** A real Workspace's header: every action asks that Workspace's resource. */
-function WorkspaceProjectRow({ workspaceId, ...props }: ProjectRowItemProps & { workspaceId: WorkspaceId }) {
+function WorkspaceResourceHeaderRowItem({ workspaceId, ...props }: WorkspaceHeaderRowItemProps & { workspaceId: WorkspaceId }) {
   const { useWorkspaceAccess } = props
   const create = useWorkspaceAccess(workspaceId, 'session/create')
   const actions: ProjectRowActions = {
     create: create ? () => { props.onCreate(workspaceId) } : undefined,
     reorder: useWorkspaceAccess(workspaceId, 'workspace/insertBefore'),
   }
-  return <ProjectRow {...props} actions={actions} />
+  return <WorkspaceHeaderRow {...props} actions={actions} />
 }
 
-function ProjectRow({
+function WorkspaceHeaderRow({
   group, containsCurrentDescendant = false, onToggle, drag: offeredDrag, home, newShortcut, t, actions,
   renderFactorySlot, useContextMenuTarget, useContextMenu,
-}: Omit<ProjectRowItemProps, 'onCreate'> & { actions: ProjectRowActions }) {
+}: Omit<WorkspaceHeaderRowItemProps, 'onCreate'> & { actions: ProjectRowActions }) {
   const { getTriggerProps } = useContextMenu()
   const drag = actions.reorder ? offeredDrag : undefined
   const create = actions.create
@@ -208,7 +209,7 @@ function ProjectRow({
     ? { workspaceId: row.workspaceId, path: row.cwd } : undefined
   const ownRow = (
     <div
-      className={clsx(css.projectRow, menuOpen && css.menuOpen)}
+      className={clsx(css.treeRow, css.workspaceHeaderRow, menuOpen && css.menuOpen)}
       data-row-key={`workspace:${group.key}`}
       role="treeitem"
       aria-expanded={row.expanded}
@@ -231,7 +232,7 @@ function ProjectRow({
       <span className={clsx(css.slot, css.chevron)}>
         <IconTriangleRightFillRegular className={clsx(css.arrow, row.expanded && css.arrowOpen)} />
       </span>
-      <span className={css.projectText}>
+      <span className={css.treeRowLabel}>
         <span className={css.title}>{label}</span>
       </span>
       <span className={css.rowActions}>
@@ -276,6 +277,78 @@ function ProjectRow({
       copyLabel={t('copy')}
       copiedLabel={t('hover.copied')}
     />
+  )
+}
+
+/**
+ * Project header row: one level above the Workspace headers. It carries the
+ * expand/collapse chevron, the project glyph, the title, the visible Workspace
+ * count, and the hover "..." menu. Project verbs are owner-only Host
+ * endpoints with no Workspace resource to ask, so the row renders its menu
+ * unconditionally and the Host stays authoritative on failure.
+ * @param props.project - derived project node.
+ * @param props.onToggle - expand/collapse the project section.
+ * @param props.renderFactorySlot - render the shared context-menu trigger.
+ * @param props.useContextMenu - shared menu gesture bindings (right-click and keyboard).
+ * @param props.useContextMenuTarget - current menu target, for the row's open state.
+ * @param props.t - the browser root's locale seat.
+ * @returns the project header row.
+ */
+export function ProjectNodeItem({
+  project, onToggle, renderFactorySlot, useContextMenu, useContextMenuTarget, t,
+}: {
+  project: ProjectNode
+  onToggle: () => void
+  t: RowTranslate
+} & Pick<WorkspaceBrowserProps, 'renderFactorySlot' | 'useContextMenu' | 'useContextMenuTarget'>) {
+  const { getTriggerProps } = useContextMenu()
+  const projectId = project.projectId
+  // The unassigned bucket has no project record: its label is dictionary copy.
+  const label = projectId === undefined ? t('project.ungrouped') : project.title
+  const menuOpen = useContextMenuTarget(target =>
+    target?.kind === 'project' && target.value.projectId === project.projectId)
+  const countLabel = t(
+    project.workspaceCount === 1 ? 'project.workspaces.one' : 'project.workspaces.other',
+    { n: project.workspaceCount },
+  )
+  return (
+    <div
+      className={clsx(css.treeRow, css.projectHeader, menuOpen && css.menuOpen)}
+      data-row-key={`project:${project.key}`}
+      role="treeitem"
+      aria-expanded={project.expanded}
+      onClick={onToggle}
+      {...getTriggerProps(projectId === undefined
+        ? undefined
+        : {
+          kind: 'project',
+          value: { projectId, title: project.title, workspaceCount: project.workspaceCount },
+        })}
+    >
+      {/* Both glyphs share the leading slot: the project icon at rest, the
+          disclosure chevron on hover (and always while the section is folded). */}
+      <span className={clsx(css.slot, css.folder, css.projectIcon, project.containsCurrent && css.folderActive)}>
+        <IconFolderOpenOutlineRegular />
+      </span>
+      <span className={clsx(css.slot, css.chevron)}>
+        <IconTriangleRightFillRegular className={clsx(css.arrow, project.expanded && css.arrowOpen)} />
+      </span>
+      <span className={css.treeRowLabel}>
+        <span className={css.title}>{label}</span>
+      </span>
+      <span className={css.projectCount} aria-hidden="true">{project.workspaceCount}</span>
+      <span className={css.visuallyHidden}>{countLabel}</span>
+      <span className={css.rowActions}>
+        {projectId !== undefined && renderFactorySlot('contextMenu.button', {
+          target: {
+            kind: 'project',
+            value: { projectId, title: project.title, workspaceCount: project.workspaceCount },
+          },
+          label: t('project.actions.aria', { name: label }),
+          className: css.iconButton,
+        })}
+      </span>
+    </div>
   )
 }
 
